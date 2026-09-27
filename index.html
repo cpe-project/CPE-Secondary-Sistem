@@ -49,6 +49,8 @@ body{margin:0;font:14px/1.5 'Inter',system-ui,-apple-system,"Segoe UI",Roboto,sa
 .topbar2 .tb-spacer{flex:1}
 .tb-bell{position:relative;background:none;border:1px solid var(--line);border-radius:10px;width:38px;height:38px;cursor:pointer;font-size:16px;flex-shrink:0}
 .tb-bell .dot{position:absolute;top:6px;right:7px;width:8px;height:8px;border-radius:50%;background:var(--bad);box-shadow:0 0 0 2px #fff}
+.tb-bell.spin{animation:spin1 .8s linear infinite}
+@keyframes spin1{from{transform:rotate(0)}to{transform:rotate(360deg)}}
 .tb-profile{position:relative;flex-shrink:0}
 .tb-profile-btn{display:flex;align-items:center;gap:8px;background:none;border:none;cursor:pointer;padding:4px 6px;border-radius:10px;font:inherit}
 .tb-profile-btn:hover{background:var(--bg2)}
@@ -158,7 +160,7 @@ label.f{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;font-w
   .topbar2 .hamb2{display:block}
   .topbar2{padding:10px 12px;gap:8px}
   .topbar2 .tb-search{max-width:none}
-  .topbar2 .tb-profile-btn b{display:none}
+  .topbar2 .tb-profile-btn b{display:block;max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .dash-bottom{flex-direction:column}
   .dash-bottom .qa-card{flex:1 1 auto}
   main{padding:16px 12px 60px}
@@ -206,6 +208,7 @@ label.f{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;font-w
     <button class="hamb2" onclick="toggleSide(true)">☰</button>
     <div class="tb-search"><span class="ic">🔍</span><input id="tb-search-input" placeholder="Cari PR, PO, atau nomor dokumen..." onkeydown="if(event.key==='Enter')doSearch()"></div>
     <div class="tb-spacer"></div>
+    <button class="tb-bell" id="tb-refresh" title="Refresh data" onclick="manualRefresh()">🔄</button>
     <button class="tb-bell" title="Perlu tindakan" onclick="setTab('dashboard')"><span id="tb-bell-ic">🔔</span><span class="dot" id="tb-bell-dot" style="display:none"></span></button>
     <div class="tb-profile">
       <button class="tb-profile-btn" onclick="toggleTbMenu()"><div class="av" id="tbAv">?</div><b id="tbName"></b><span style="font-size:11px;color:var(--mut)">▾</span></button>
@@ -272,6 +275,7 @@ const LOGIN_ACCOUNTS = [
   {role:'dh_engineering', label:'Dept. Head Engineering',  username:'depthead-engineering'},
   {role:'dh_hrga',        label:'Dept. Head HRGA',         username:'depthead-hrga'},
   {role:'purchasing',     label:'Purchasing',              username:'purchasing'},
+  {role:'warehouse',      label:'Warehouse',                username:'warehouse'},
   {role:'planner',        label:'Planner',                 username:'planner'},
   {role:'user',           label:'User',                     username:'user'},
   {role:'finance',        label:'Finance',                  username:'finance'},
@@ -338,7 +342,7 @@ const DEFAULT_CATALOG = [
     ['GLV-WLD-009','Sarung Tangan Las','pasang',25],['SEAL-KIT-010','Seal Kit Cylinder Boom','set',0],
     ['LMP-LED-011','Lampu Work Light LED 24V','pcs',5],['BLT-M16-012','Baut M16 x 60 Grade 8.8','pcs',200]
   ].map(([code,name,uom,stock])=>({code,name,uom,stock}));
-function emptyState(){ return {catalog:DEFAULT_CATALOG, seq:{PR:0,WR:0,SRC:0,PO:0}, prs:[], wrs:[], src:[], pos:[], signatures:{}}; }
+function emptyState(){ return {catalog:DEFAULT_CATALOG, suppliers:[], seq:{PR:0,WR:0,SRC:0,PO:0}, prs:[], wrs:[], src:[], pos:[], signatures:{}}; }
 
 /* ---- mapping antara bentuk data di JS (camelCase) dan kolom Supabase (snake_case) ---- */
 const toPR = r => ({id:r.id, no:r.no, date:r.date, requester:r.requester, unitCode:r.unit_code, dept:r.dept, purpose:r.purpose, priority:r.priority, needBy:r.need_by||'', items:r.items||[], status:r.status, deptHeadName:r.dept_head_name, history:r.history||[]});
@@ -351,14 +355,15 @@ const toPO = r => ({id:r.id, no:r.no, date:r.date, srcId:r.src_id, supplier:r.su
 const fromPO = d => ({id:d.id, no:d.no, date:d.date, src_id:d.srcId||null, supplier:d.supplier, supplier_address:d.supplierAddress||null, supplier_fax:d.supplierFax||null, supplier_attn:d.supplierAttn||null, quote_no:d.quoteNo||null, dept_req:d.deptReq||null, lead_days:d.leadDays||null, items:d.items||[], subtotal:d.subtotal||0, discount:d.discount||0, ppn:d.ppn||0, shipping:d.shipping||0, total:d.total||0, narrative:d.narrative||null, reason:d.reason||null, needs_director:!!d.needsDirector, status:d.status, quote_file_name:d.quoteFileName||null, quote_file_data:d.quoteFileData||null, payment:d.payment||null, receiving:d.receiving||null, history:d.history||[]});
 
 async function loadFromSupabase(){
-  const [prsR,wrsR,srcR,posR,sigR,seqR,catR] = await Promise.all([
+  const [prsR,wrsR,srcR,posR,sigR,seqR,catR,supR] = await Promise.all([
     sb.from('prs').select('*').order('date',{ascending:false}),
     sb.from('wrs').select('*').order('date',{ascending:false}),
     sb.from('src').select('*').order('date',{ascending:false}),
     sb.from('pos').select('*').order('date',{ascending:false}),
     sb.from('signatures').select('*'),
     sb.from('doc_seq').select('*'),
-    sb.from('catalog').select('code,name,uom,stock')
+    sb.from('catalog').select('code,name,uom,stock'),
+    sb.from('suppliers').select('name,address,fax,attn')
   ]);
   const S2 = emptyState();
   if(prsR.data) S2.prs = prsR.data.map(toPR);
@@ -368,6 +373,7 @@ async function loadFromSupabase(){
   if(sigR.data) sigR.data.forEach(r=>{ S2.signatures[r.role]=r.data_url; });
   if(seqR.data) seqR.data.forEach(r=>{ S2.seq[r.doc_type]=r.value; });
   if(catR.data && catR.data.length) S2.catalog = catR.data.map(r=>({code:r.code,name:r.name,uom:r.uom||'pcs',stock:Number(r.stock)||0}));
+  if(supR && supR.data) S2.suppliers = supR.data.map(r=>({name:r.name,address:r.address||'',fax:r.fax||'',attn:r.attn||''}));
   if(!S2.signatures.mgmt1) S2.signatures.mgmt1 = DEFAULT_SIGNATURES.mgmt1;
   if(!S2.signatures.mgmt2) S2.signatures.mgmt2 = DEFAULT_SIGNATURES.mgmt2;
   S = S2;
@@ -388,6 +394,7 @@ async function save(){
     const seqRows = Object.entries(S.seq||{}).map(([doc_type,value])=>({doc_type,value}));
     if(seqRows.length) ops.push(sb.from('doc_seq').upsert(seqRows));
     if(S.catalog && S.catalog.length) ops.push(sb.from('catalog').upsert(S.catalog.map(c=>({code:c.code,name:c.name,uom:c.uom,stock:c.stock}))));
+    if(S.suppliers && S.suppliers.length) ops.push(sb.from('suppliers').upsert(S.suppliers.map(x=>({name:x.name,address:x.address||null,fax:x.fax||null,attn:x.attn||null}))));
     const results = await Promise.all(ops);
     const err = results.find(r=>r && r.error);
     if(err){ console.error(err.error); toast('Gagal menyimpan ke server: '+err.error.message); }
@@ -958,12 +965,38 @@ function issueWR(){
 
 /* ============ Quotation & PO ============ */
 const qTotal = (src,q) => src.items.reduce((s,it,i)=>s+it.qty*(q.prices[i]||0),0);
+function knownSuppliers(){
+  const names = new Set(SUPPLIERS);
+  (S.suppliers||[]).forEach(x=>names.add(x.name));
+  return [...names].sort((a,b)=>a.localeCompare(b));
+}
+function fillSupplierInfo(name){
+  const sup = (S.suppliers||[]).find(x=>x.name.toLowerCase()===String(name||'').trim().toLowerCase());
+  if(!sup) return;
+  if($('#q-addr') && !$('#q-addr').value.trim()) $('#q-addr').value = sup.address||'';
+  if($('#q-fax') && !$('#q-fax').value.trim()) $('#q-fax').value = sup.fax||'';
+  if($('#q-attn') && !$('#q-attn').value.trim()) $('#q-attn').value = sup.attn||'';
+}
+function rememberSupplier(q){
+  if(!q.supplier) return;
+  const existing = (S.suppliers||[]).find(x=>x.name.toLowerCase()===q.supplier.toLowerCase());
+  if(existing){
+    existing.name = q.supplier;
+    if(q.address) existing.address = q.address;
+    if(q.fax) existing.fax = q.fax;
+    if(q.attn) existing.attn = q.attn;
+  } else {
+    S.suppliers = S.suppliers||[];
+    S.suppliers.push({name:q.supplier, address:q.address||'', fax:q.fax||'', attn:q.attn||''});
+  }
+}
 function formQuote(srcId){
   const s=find('src',srcId);
   showModal(`<h3>Tambah quotation — ${esc(s.no)}</h3>
-  <label class="f">Supplier *</label><input id="q-sup" list="sups" class="grow" style="width:100%" placeholder="Nama supplier"><datalist id="sups">${SUPPLIERS.map(x=>`<option value="${esc(x)}">`).join('')}</datalist>
+  <label class="f">Supplier *</label><input id="q-sup" list="sups" class="grow" style="width:100%" placeholder="Nama supplier" oninput="fillSupplierInfo(this.value)"><datalist id="sups">${knownSuppliers().map(x=>`<option value="${esc(x)}">`).join('')}</datalist>
   <label class="f">Alamat Supplier</label><textarea id="q-addr" placeholder="Alamat lengkap supplier"></textarea>
   <div class="row"><div><label class="f">Lead time (hari)</label><input id="q-lead" inputmode="numeric" style="width:120px"></div><div><label class="f">No. Fax</label><input id="q-fax" style="width:150px"></div><div><label class="f">Attn (PIC)</label><input id="q-attn" style="width:180px"></div><div><label class="f">No. Quotation</label><input id="q-qno" style="width:150px"></div></div>
+  <div class="hint" style="margin-top:-6px;margin-bottom:8px">Ketik/pilih nama supplier yang sudah pernah dipakai untuk mengisi otomatis alamat, fax &amp; attn.</div>
   <label class="f">Harga satuan per item (Rp) *</label>
   <div class="tw"><table><tbody>${s.items.map((it,i)=>`<tr><td>${esc(it.name)}<br><span class="hint">${fmt(it.qty)} ${esc(it.uom)}</span></td><td><input class="q-price" data-i="${i}" inputmode="decimal" placeholder="0" style="width:150px" oninput="fmtInput(this)"></td></tr>`).join('')}</tbody></table></div>
   <label class="f">Catatan</label><textarea id="q-note" placeholder="mis. garansi, syarat pembayaran, ketersediaan"></textarea>
@@ -979,6 +1012,7 @@ function submitQuote(srcId){
   const finalizeQuote = (file) => {
     if(file){ quote.fileName=file.name; quote.fileData=file.data; }
     s.quotes.push(quote);
+    rememberSupplier(quote);
     hist(s,'Quotation ditambahkan',supplier+(file?' — dokumen: '+file.name:''));
     openDoc('src',srcId); save(); render(); toast('Quotation tersimpan');
   };
@@ -1124,6 +1158,11 @@ async function receivePO(id){
   po.receiving = {photos, suratJalan, note, receivedBy, glName, receivedAt: iso()};
   po.status='RECEIVED';
   hist(po,'Barang diterima Warehouse (PO Closed)',`Diterima oleh ${receivedBy}, diketahui ${glName}`+(note?' — '+note:''));
+  const s=S.src.find(x=>x.id===po.srcId);
+  if(s && s.srcType==='PR'){
+    const pr=find('pr',s.srcId);
+    if(pr && pr.status!=='CLOSED'){ pr.status='CLOSED'; hist(pr,'PO diterima — PR ditutup',po.no); }
+  }
   refresh(); toast('PO ditutup — barang diterima');
 }
 
@@ -1246,8 +1285,7 @@ function pdfReceiving(id){
   d.setFont('helvetica','normal'); d.setFontSize(9.5);
   d.text('Diterima oleh,',30,y,{align:'center'}); d.text('Mengetahui,',165,y,{align:'center'});
   d.line(15,y+20,55,y+20); d.line(150,y+20,190,y+20);
-  d.setFont('helvetica','bold'); d.setFontSize(8.5); d.text(rc.receivedBy||'-',30,y+24,{align:'center'}); d.text(rc.glName||'-',165,y+24,{align:'center'});
-  d.setFont('helvetica','normal'); d.setFontSize(7.5); d.text('Crew Warehouse',30,y+28,{align:'center'}); d.text('Warehouse GL',165,y+28,{align:'center'});
+  d.setFont('helvetica','bold'); d.setFontSize(8.5); d.text('Crew Warehouse',30,y+24,{align:'center'}); d.text('Warehouse GL',165,y+24,{align:'center'});
   d.save('RECEIVING-'+po.no.replace(/\//g,'-')+'.pdf');
 }
 /* ============ WR Form PDF ============ */
@@ -1479,6 +1517,16 @@ let realtimeChannel = null, reloadTimer = null;
 function reloadQuiet(){
   clearTimeout(reloadTimer);
   reloadTimer = setTimeout(async ()=>{ await loadFromSupabase(); render(); if(current) docModal(current.type,current.id); }, 500);
+}
+async function manualRefresh(){
+  const btn = $('#tb-refresh'); if(btn){ btn.disabled = true; btn.classList.add('spin'); }
+  try{
+    await loadFromSupabase();
+    render();
+    if(current) docModal(current.type,current.id);
+    toast('Data diperbarui');
+  }catch(e){ toast('Gagal memuat ulang data'); }
+  if(btn){ btn.disabled = false; btn.classList.remove('spin'); }
 }
 function subscribeRealtime(){
   if(realtimeChannel) return;
