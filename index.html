@@ -224,7 +224,7 @@ label.f{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;font-w
   <div class="authbox">
     <img id="authLogo" alt="PT Citra Patra Energi" style="max-width:220px;height:auto;display:block;margin-bottom:10px">
     <div class="hint" style="margin-bottom:10px">Masuk dengan akun yang diberikan admin.</div>
-    <label class="f">Username</label><input id="auth-email" placeholder="" autocomplete="username">
+    <label class="f">Akun</label><select id="auth-email" autocomplete="username"><option value="">Pilih akun</option></select>
     <label class="f">Password</label><input id="auth-pass" type="password" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
     <div id="authErr" class="warnbox" style="display:none"></div>
     <div class="btns" style="margin-top:14px"><button class="btn pri" style="width:100%" onclick="doLogin()">Masuk</button></div>
@@ -234,6 +234,7 @@ label.f{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;font-w
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 /* ============ Supabase ============ */
 const SUPABASE_URL = 'https://igyhcaoggwjlvwxbksyf.supabase.co';
@@ -242,18 +243,40 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 /* ============ Konfigurasi ============ */
 const ROLES = {
-  user:      {label:'User / Mekanik',                          name:'Andi Saputra'},
-  approver:  {label:'Head Departemen (Plant-SM/Produksi/HSE/Engineering)', name:'(diisi manual saat approve)'},
-  purchasing:{label:'Purchasing',                              name:'Tim Purchasing'},
-  mgmt1:     {label:'Project Manajer (PO ≤ Rp5 jt)',           name:'Parto Jaya H Silitonga', title:'Project Manager'},
-  mgmt2:     {label:'Direktur Operation (PO > Rp5 jt)',        name:'Faisal H Simangunsong', title:'Operational Director'},
-  finance:   {label:'Finance',                                 name:'Eka Putri Shinta'},
-  warehouse: {label:'Warehouse',                               name:'Joko'},
-  admin:     {label:'Administrator (akses penuh)',             name:'Admin'}
+  user:          {label:'User',                                    name:'Andi Saputra'},
+  planner:       {label:'Planner',                                 name:'Tim Planner'},
+  dh_plantsm:    {label:'Dept. Head Plant-SM',                      name:'(belum diisi)'},
+  dh_hse:        {label:'Dept. Head HSE',                           name:'(belum diisi)'},
+  dh_produksi:   {label:'Dept. Head Production',                    name:'(belum diisi)'},
+  dh_engineering:{label:'Dept. Head Engineering',                   name:'(belum diisi)'},
+  dh_hrga:       {label:'Dept. Head HRGA',                          name:'(belum diisi)'},
+  purchasing:    {label:'Purchasing',                               name:'Tim Purchasing'},
+  mgmt1:         {label:'Project Manager (PO ≤ Rp5 jt)',            name:'Parto Jaya H Silitonga', title:'Project Manager'},
+  mgmt2:         {label:'Operational Director (PO > Rp5 jt)',       name:'Faisal H Simangunsong', title:'Operational Director'},
+  finance:       {label:'Finance',                                  name:'Eka Putri Shinta'},
+  warehouse:     {label:'Warehouse',                                name:'Joko'},
+  admin:         {label:'Administrator (akses penuh)',              name:'Admin'}
 };
 const LIMIT = 5000000;
-const DEPTS = ['PLANT-SM','PRODUKSI','HSE','ENGINEERING'];
-function deptHeadLabel(dept){ return {'PLANT-SM':'Head Plant-SM','PRODUKSI':'Head Produksi','HSE':'Head HSE','ENGINEERING':'Head Engineering'}[dept] || 'Head Departemen'; }
+const DEPTS = ['PLANT-SM','PRODUKSI','HSE','ENGINEERING','HRGA'];
+function deptHeadLabel(dept){ return {'PLANT-SM':'Head Plant-SM','PRODUKSI':'Head Produksi','HSE':'Head HSE','ENGINEERING':'Head Engineering','HRGA':'Head HRGA'}[dept] || 'Head Departemen'; }
+const DEPT_ROLE = {'PLANT-SM':'dh_plantsm','HSE':'dh_hse','PRODUKSI':'dh_produksi','ENGINEERING':'dh_engineering','HRGA':'dh_hrga'};
+function canApproveDept(dept){ return role==='admin' || role===DEPT_ROLE[dept]; }
+function canDownloadHistoris(){ return can('purchasing') || can('planner') || can('dh_plantsm'); }
+const LOGIN_ACCOUNTS = [
+  {role:'mgmt2',          label:'Operational Director',    username:'operationaldirector'},
+  {role:'mgmt1',          label:'Project Manager',         username:'projectmanager'},
+  {role:'dh_plantsm',     label:'Dept. Head Plant-SM',     username:'depthead-plantsm'},
+  {role:'dh_hse',         label:'Dept. Head HSE',          username:'depthead-hse'},
+  {role:'dh_produksi',    label:'Dept. Head Production',   username:'depthead-production'},
+  {role:'dh_engineering', label:'Dept. Head Engineering',  username:'depthead-engineering'},
+  {role:'dh_hrga',        label:'Dept. Head HRGA',         username:'depthead-hrga'},
+  {role:'purchasing',     label:'Purchasing',              username:'purchasing'},
+  {role:'planner',        label:'Planner',                 username:'planner'},
+  {role:'user',           label:'User',                     username:'user'},
+  {role:'finance',        label:'Finance',                  username:'finance'},
+  {role:'admin',          label:'Administrator',            username:'admin'}
+];
 const SUPPLIERS = ['PT Sumber Teknik Mandiri','CV Berkah Alat Berat','PT Duta Spare Parts','UD Maju Jaya Balikpapan','PT Kaltim Hydraulic Service'];
 const PR_ST = {PENDING_USER:['Menunggu Approval Head Departemen','warn'],PENDING_PM:['Menunggu Project Manajer','info'],PENDING_DIRECTOR:['Menunggu Direktur Operation','info'],SOURCING:['Proses Quotation','info'],PO_PROCESS:['PO Diproses','info'],CLOSED:['PO Terbit','ok'],REJECTED:['Ditolak','bad'],CANCELLED:['Dibatalkan Purchasing','bad']};
 const WR_ST = {PENDING_USER:['Menunggu Approval Head Departemen','warn'],WH_PROCESS:['Proses Warehouse','info'],SOURCING:['Tidak Ready – Quotation','warn'],PARTIAL:['Issue Sebagian – Sisa Quotation','warn'],ISSUED:['Sudah Di-issue','ok'],REJECTED:['Ditolak','bad']};
@@ -297,8 +320,10 @@ const COMPANY_LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAfQAAAB5CAIA
 const COMPANY_LOGO_RATIO = 500/121;
 if(document.getElementById("authLogo")) document.getElementById("authLogo").src = COMPANY_LOGO;
 if(document.getElementById("sideLogo")) document.getElementById("sideLogo").src = COMPANY_LOGO;
+(function(){ const sel=document.getElementById('auth-email'); if(sel) LOGIN_ACCOUNTS.forEach(a=>{ const o=document.createElement('option'); o.value=a.username; o.textContent=a.label; sel.appendChild(o); }); })();
 const badge = (map,k) => { const m = map[k]||[k,'gray']; return `<span class="badge b-${m[1]}">${esc(m[0])}</span>`; };
 const summary = items => items.length ? esc(items[0].name) + (items.length>1 ? ` <span class="hint">(+${items.length-1} lainnya)</span>` : '') : '-';
+const summaryPlain = items => items.length ? items[0].name + (items.length>1 ? ` (+${items.length-1} lainnya)` : '') : '-';
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(toast.t); toast.t=setTimeout(()=>t.classList.remove('on'),2600); }
 
 /* ============ Data & penyimpanan ============ */
@@ -397,11 +422,11 @@ function poCurrentApproverKey(po){
 }
 function isActionable(t,d){
   if(t==='pr'||t==='wr'){
-    if(d.status==='PENDING_USER') return can('approver');
+    if(d.status==='PENDING_USER') return canApproveDept(d.dept);
     if(t==='pr' && d.status==='PENDING_PM') return can('mgmt1');
     if(t==='pr' && d.status==='PENDING_DIRECTOR') return can('mgmt2');
     if(t==='wr' && d.status==='WH_PROCESS') return can('warehouse');
-    if(d.status==='REJECTED') return can('user');
+    if(d.status==='REJECTED') return can('user') || can('planner');
     return false;
   }
   if(t==='src') return d.status==='OPEN' && can('purchasing');
@@ -521,9 +546,9 @@ function vDash(){
     }).join('')}</tbody></table></div>`
     : `<div class="empty-hero"><div class="ic-wrap"><div class="ic-circ">📋</div><div class="ic-badge">!</div></div><div><b>Tidak ada dokumen yang perlu ditindaklanjuti untuk saat ini.</b><span>Saat ada Purchase Request atau Warehouse Request baru, Anda akan melihatnya di sini.</span></div></div>`}
   </div>
-  ${can('user')?`<div class="card qa-card"><h3 style="margin:0 0 12px;font-size:15px">⚡ Aksi Cepat</h3>
+  ${(can('user')||can('planner'))?`<div class="card qa-card"><h3 style="margin:0 0 12px;font-size:15px">⚡ Aksi Cepat</h3>
     <button class="btn pri qa-btn" onclick="formPR()"><span>+ Buat Purchase Request</span><span>›</span></button>
-    <button class="btn qa-btn" onclick="formWR()"><span>+ Buat Warehouse Request</span><span>›</span></button>
+    ${can('planner')?`<button class="btn qa-btn" onclick="formWR()"><span>+ Buat Warehouse Request</span><span>›</span></button>`:''}
   </div>`:''}
   </div>`;
 }
@@ -536,37 +561,61 @@ function vInfo(){
     <div class="hint">Warehouse Request — item sudah terkatalog</div>
     <div class="flow"><span>User buat WR</span><i>→</i><span>Approve Head Departemen</span><i>→</i><span>Approve Project Manajer</span><i>→</i><span>Warehouse issue</span><i>→</i><span>Selesai bila ready</span></div>
     <div class="flow"><span>Tidak ready</span><i>→</i><span>Purchasing: quotation</span><i>→</i><span>Buat PO</span><i>→</i><span>Approve Project Manajer</span><i>→</i><span>(&gt;5jt) Approve Direktur Operation</span><i>→</i><span>Finance proses bayar</span><i>→</i><span>PO PDF → Supplier</span></div>
-    <div class="hint">Approval PR: Head Departemen sesuai dept (Plant-SM/Produksi/HSE, nama diisi manual saat approve) → ${esc(ROLES.mgmt1.name)} (Project Manajer) → ${esc(ROLES.mgmt2.name)} (Direktur Operation), baru diteruskan ke Purchasing untuk quotation. Approval WR: cukup Head Departemen sesuai dept, langsung diteruskan ke Warehouse. Approval PO: selalu mulai dari ${esc(ROLES.mgmt1.name)} (Project Manajer); bila total &gt; ${rp(LIMIT)} naik lagi ke ${esc(ROLES.mgmt2.name)} (Direktur Operation), baru lanjut Finance. PO baru bisa diterbitkan sebagai PDF ke supplier setelah pembayaran diproses oleh Finance.</div>
+    <div class="hint">Approval PR: Head Departemen sesuai departemen pengaju (Plant-SM/Produksi/HSE/Engineering/HRGA — masing-masing punya akun login sendiri dan hanya bisa approve PR/WR dari departemennya) → ${esc(ROLES.mgmt1.name)} (Project Manager) → ${esc(ROLES.mgmt2.name)} (Operational Director), baru diteruskan ke Purchasing untuk quotation. Approval WR: cukup Head Departemen sesuai dept, langsung diteruskan ke Warehouse. Approval PO: selalu mulai dari ${esc(ROLES.mgmt1.name)} (Project Manager); bila total &gt; ${rp(LIMIT)} naik lagi ke ${esc(ROLES.mgmt2.name)} (Operational Director), baru lanjut Finance. PO baru bisa diterbitkan sebagai PDF ke supplier setelah pembayaran diproses oleh Finance. PR hanya bisa dibuat oleh User/Planner; WR hanya oleh Planner. Download laporan historis PR/PO tersedia untuk Purchasing, Planner, dan Dept. Head Plant-SM.</div>
   </div>`;
 }
 
 function vList(t){
   const cfg = {
-    pr:{title:'Purchase Request',sub:'Permintaan item yang belum terkatalog.',btn:can('user')?['+ Buat PR','formPR()']:null,
+    pr:{title:'Purchase Request',sub:'Permintaan item yang belum terkatalog.',btn:(can('user')||can('planner'))?['+ Buat PR','formPR()']:null,
+        exp:canDownloadHistoris()?[['📊 Export Excel','exportPRExcel()'],['🖨 Export PDF','exportPRPdf()']]:null,
         head:['No','Tanggal','Pemohon','Item','Prioritas','Status'],row:d=>[`<b>${esc(d.no)}</b>`,dd(d.date),esc(d.requester),summary(d.items),d.priority==='Urgent'?'<span class="badge b-bad">Urgent</span>':'<span class="badge b-gray">Normal</span>',badge(PR_ST,d.status)]},
-    wr:{title:'Warehouse Request',sub:'Permintaan item yang sudah terkatalog.',btn:can('user')?['+ Buat WR','formWR()']:null,
+    wr:{title:'Warehouse Request',sub:'Permintaan item yang sudah terkatalog.',btn:can('planner')?['+ Buat WR','formWR()']:null,
         head:['No','Tanggal','Pemohon','Item','Status'],row:d=>[`<b>${esc(d.no)}</b>`,dd(d.date),esc(d.requester),summary(d.items),badge(WR_ST,d.status)]},
     src:{title:'Quotation (Purchasing)',sub:'Antrian kebutuhan dari PR dan dari WR yang tidak ready.',btn:null,
         head:['No','Sumber','Item','Quotation','Status'],row:d=>[`<b>${esc(d.no)}</b>`,`${esc(d.refNo)}`,summary(d.items),d.quotes.length+' masuk',badge(SRC_ST,d.status)]},
     po:{title:'Purchase Order',sub:'PO menunggu approval Manajemen, lalu proses pembayaran Finance, sampai PDF terbit.',btn:null,
+        exp:canDownloadHistoris()?[['📊 Export Excel','exportPOExcel()'],['🖨 Export PDF','exportPOPdf()']]:null,
         head:['No PO','Supplier','Total','Pemilihan','Approver','Status'],row:d=>[`<b>${esc(d.no)}</b>`,esc(d.supplier),rp(d.total),d.reason?'<span class="badge b-warn">Bukan termurah</span>':'<span class="badge b-ok">Termurah</span>',esc(ROLES[poCurrentApproverKey(d)].name),badge(PO_ST,d.status)]}
   }[t];
   const data = coll(t);
-  return `<div class="top"><h2>${cfg.title}</h2>${cfg.btn?`<button class="btn pri" onclick="${cfg.btn[1]}">${cfg.btn[0]}</button>`:''}<p>${cfg.sub}</p></div>
+  const expBtns = (cfg.exp&&data.length) ? cfg.exp.map(([l,fn])=>`<button class="btn" onclick="${fn}">${l}</button>`).join('') : '';
+  return `<div class="top"><h2>${cfg.title}</h2>${cfg.btn?`<button class="btn pri" onclick="${cfg.btn[1]}">${cfg.btn[0]}</button>`:''}${expBtns}<p>${cfg.sub}</p></div>
   <div class="card tw">${data.length?`<table><thead><tr>${cfg.head.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>
     ${data.map(d=>{const c=cfg.row(d);return `<tr class="click" onclick="openDoc('${t}','${d.id}')">${c.map((x,i)=>`<td>${x}${i===0&&isActionable(t,d)?'<span class="act">Perlu tindakan</span>':''}</td>`).join('')}</tr>`;}).join('')}
   </tbody></table>`:`<div class="empty">Belum ada dokumen.</div>`}</div>`;
 }
 
 function vCat(){
-  return `<div class="top"><h2>Katalog & Stok</h2><p>Item terkatalog dan stok gudang saat ini. ${can('warehouse')?'Sebagai Warehouse Anda dapat mengubah stok untuk mencoba skenario ready / tidak ready.':''}</p></div>
-  <div class="card tw"><table><thead><tr><th>Kode</th><th>Nama item</th><th>Sat</th><th class="r">Stok</th>${can('warehouse')?'<th></th>':''}</tr></thead><tbody>
-  ${S.catalog.map(c=>`<tr><td>${esc(c.code)}</td><td>${esc(c.name)}</td><td>${esc(c.uom)}</td><td class="r">${c.stock>0?fmt(c.stock):'<span class="badge b-bad">Kosong</span>'}</td>${can('warehouse')?`<td class="r"><button class="btn sm" onclick="editStock('${c.code}')">Ubah stok</button></td>`:''}</tr>`).join('')}
-  </tbody></table></div>`;
+  return `<div class="top"><h2>Katalog & Stok</h2><p>Item terkatalog dan stok gudang saat ini. ${can('warehouse')?'Sebagai Warehouse Anda dapat menambah item baru, mengubah nama/satuan/stok item.':''}</p></div>
+  <div class="card">
+    ${can('warehouse')?`<div class="btns" style="margin-bottom:10px"><button class="btn pri" onclick="formCatalogItem()">+ Tambah Item Katalog</button></div>`:''}
+    <div class="tw"><table><thead><tr><th>Kode</th><th>Nama item</th><th>Sat</th><th class="r">Stok</th>${can('warehouse')?'<th></th>':''}</tr></thead><tbody>
+    ${S.catalog.map(c=>`<tr><td>${esc(c.code)}</td><td>${esc(c.name)}</td><td>${esc(c.uom)}</td><td class="r">${c.stock>0?fmt(c.stock):'<span class="badge b-bad">Kosong</span>'}</td>${can('warehouse')?`<td class="r"><button class="btn sm" onclick="formCatalogItem('${c.code}')">Ubah</button></td>`:''}</tr>`).join('')}
+    </tbody></table></div>
+  </div>`;
 }
-function editStock(code){
-  const c=S.catalog.find(x=>x.code===code); const v=prompt(`Stok baru untuk ${c.name}:`,c.stock);
-  if(v===null) return; c.stock=Math.max(0,parseNum(v)); save(); render();
+function formCatalogItem(code){
+  if(!can('warehouse')) return;
+  const c = code ? S.catalog.find(x=>x.code===code) : null;
+  showModal(`<h3>${c?'Ubah Item Katalog':'Tambah Item Katalog'}</h3>
+    <label class="f">Kode Item *</label><input id="cat-code" value="${c?esc(c.code):''}" ${c?'disabled':''} placeholder="mis. FLT-001">
+    <label class="f">Nama Item *</label><input id="cat-name" value="${c?esc(c.name):''}" placeholder="mis. Filter Oli">
+    <label class="f">Satuan *</label><input id="cat-uom" value="${c?esc(c.uom):''}" placeholder="mis. pcs, liter, unit">
+    <label class="f">Stok</label><input id="cat-stock" inputmode="decimal" value="${c?fmt(c.stock):'0'}" oninput="fmtInput(this)">
+    <div class="btns" style="margin-top:14px"><button class="btn pri" onclick="saveCatalogItem(${c?`'${esc(c.code)}'`:'null'})">Simpan</button></div>`);
+}
+function saveCatalogItem(origCode){
+  if(!can('warehouse')) return;
+  const code = ($('#cat-code').value||'').trim().toUpperCase();
+  const name = ($('#cat-name').value||'').trim();
+  const uom = ($('#cat-uom').value||'').trim();
+  const stock = Math.max(0, parseNum($('#cat-stock').value));
+  if(!code||!name||!uom) return toast('Kode, nama, dan satuan wajib diisi');
+  if(!origCode && S.catalog.some(x=>x.code===code)) return toast('Kode item sudah ada');
+  if(origCode){ const c=S.catalog.find(x=>x.code===origCode); c.name=name; c.uom=uom; c.stock=stock; }
+  else S.catalog.push({code,name,uom,stock});
+  save(); closeModal(); render(); toast('Item katalog disimpan');
 }
 
 /* ============ Modal ============ */
@@ -612,8 +661,8 @@ function docModal(t,id){
     }
     if(d.status==='REJECTED'){
       const lastRej = [...d.history].reverse().find(hh=>/[Dd]itolak/.test(hh.action));
-      h += `<div class="warnbox">${wr?'WR':'PR'} ini ditolak${lastRej&&lastRej.note?': '+esc(lastRej.note):''}. ${can('user')?'Anda dapat merevisi dan mengajukan ulang.':'Menunggu User merevisi dan mengajukan ulang.'}</div>`;
-      if(can('user')) h += `<div class="btns"><button class="btn pri" onclick="${wr?'reviseWR':'revisePR'}('${d.id}')">Revisi & Ajukan Ulang</button></div>`;
+      h += `<div class="warnbox">${wr?'WR':'PR'} ini ditolak${lastRej&&lastRej.note?': '+esc(lastRej.note):''}. ${(can('user')||can('planner'))?'Anda dapat merevisi dan mengajukan ulang.':'Menunggu User/Planner merevisi dan mengajukan ulang.'}</div>`;
+      if(can('user')||can('planner')) h += `<div class="btns"><button class="btn pri" onclick="${wr?'reviseWR':'revisePR'}('${d.id}')">Revisi & Ajukan Ulang</button></div>`;
     } else if(d.status==='CANCELLED'){
       const lastCanc = [...d.history].reverse().find(hh=>/Dibatalkan/.test(hh.action));
       h += `<div class="warnbox">${wr?'WR':'PR'} ini dibatalkan oleh Purchasing${lastCanc&&lastCanc.note?': '+esc(lastCanc.note):''}.</div>`;
@@ -1235,6 +1284,117 @@ function pdfWR(id){
   d.setFontSize(8); d.text('Nama & Tanggal',30,y+24,{align:'center'}); d.text('Nama & Tanggal',165,y+24,{align:'center'});
   d.save(wr.no.replace(/\//g,'-')+'.pdf');
 }
+
+/* ============ Export Historis: PR & PO (Excel & PDF) ============ */
+function xlsxReady(){ return !!(window.XLSX); }
+function pdfReady(){ return !!(window.jspdf&&window.jspdf.jsPDF); }
+function autoWidth(rows){
+  if(!rows.length) return [];
+  const keys = Object.keys(rows[0]);
+  return keys.map(k=>{
+    const maxLen = Math.max(k.length, ...rows.map(r=>String(r[k]??'').length));
+    return {wch: Math.min(Math.max(maxLen+2,10),45)};
+  });
+}
+function lastHist(d,re){ const h=[...(d.history||[])].reverse().find(x=>re.test(x.action)); return h ? (dt(h.ts)+(h.note?' — '+h.note:'')) : '-'; }
+
+function exportPRExcel(){
+  if(!xlsxReady()) return toast('Library Excel belum termuat (perlu koneksi internet)');
+  const prs = S.prs;
+  if(!prs.length) return toast('Belum ada data PR');
+  const ringkasan = prs.map(d=>({
+    'No PR': d.no, 'Tanggal': dd(d.date), 'Pemohon': d.requester||'-', 'Kode Unit': d.unitCode||'-', 'Departemen': d.dept||'-',
+    'Prioritas': d.priority||'-', 'Dibutuhkan': d.needBy?dd(d.needBy):'-', 'Keperluan': d.purpose||'-',
+    'Jumlah Item': d.items.length, 'Status': (PR_ST[d.status]||[d.status])[0], 'Head Departemen': d.deptHeadName||'-',
+    'Disetujui/Ditolak Terakhir': lastHist(d,/Disetujui|Ditolak|Dibatalkan/)
+  }));
+  const detail = [];
+  prs.forEach(d=>d.items.forEach((it,i)=>detail.push({
+    'No PR': d.no, 'Tanggal': dd(d.date), 'No': i+1, 'Nama Item': it.name, 'Spesifikasi': it.spec||'-', 'Qty': it.qty, 'Satuan': it.uom
+  })));
+  const wb = XLSX.utils.book_new();
+  const ws1 = XLSX.utils.json_to_sheet(ringkasan); ws1['!cols']=autoWidth(ringkasan);
+  const ws2 = XLSX.utils.json_to_sheet(detail); ws2['!cols']=autoWidth(detail);
+  XLSX.utils.book_append_sheet(wb,ws1,'Ringkasan PR');
+  XLSX.utils.book_append_sheet(wb,ws2,'Detail Item PR');
+  XLSX.writeFile(wb,'Historis-PR-'+dd2(iso())+'.xlsx');
+  toast('Excel PR berhasil diunduh');
+}
+
+function exportPOExcel(){
+  if(!xlsxReady()) return toast('Library Excel belum termuat (perlu koneksi internet)');
+  const pos = S.pos;
+  if(!pos.length) return toast('Belum ada data PO');
+  const ringkasan = pos.map(d=>{
+    const rc = d.receiving;
+    return {
+      'No PO': d.no, 'Tanggal': dd(d.date), 'Supplier': d.supplier||'-', 'Referensi': (S.src.find(s=>s.id===d.srcId)||{}).refNo || '-',
+      'Dept Req': d.deptReq||'-', 'Lead Time (hari)': d.leadDays||'-',
+      'Subtotal': d.subtotal||0, 'Diskon': d.discount||0, 'PPN': d.ppn||0, 'Ongkos Kirim': d.shipping||0, 'Total': d.total||0,
+      'Status': (PO_ST[d.status]||[d.status])[0], 'Approver Saat Ini/Terakhir': (ROLES[poCurrentApproverKey(d)]||{}).name||'-',
+      'Metode Pembayaran': d.payment?d.payment.method:'-', 'No Ref Pembayaran': d.payment?(d.payment.ref||'-'):'-', 'Tanggal Bayar': d.payment?dt(d.payment.date):'-',
+      'Status Penerimaan Barang': d.status==='RECEIVED'?'Diterima':(d.status==='SENT'?'Dikirim, menunggu diterima':'-'),
+      'Diterima Oleh (Crew)': rc?rc.receivedBy||'-':'-', 'Diketahui (Warehouse GL)': rc?rc.glName||'-':'-', 'Tanggal Terima': rc?dt(rc.receivedAt):'-'
+    };
+  });
+  const detail = [];
+  pos.forEach(d=>d.items.forEach((it,i)=>detail.push({
+    'No PO': d.no, 'Tanggal': dd(d.date), 'No': i+1, 'Nama Item': it.name, 'Spesifikasi': it.spec||'-', 'Qty': it.qty, 'Satuan': it.uom,
+    'Harga Satuan': it.price||0, 'Jumlah': (it.qty||0)*(it.price||0)
+  })));
+  const wb = XLSX.utils.book_new();
+  const ws1 = XLSX.utils.json_to_sheet(ringkasan); ws1['!cols']=autoWidth(ringkasan);
+  const ws2 = XLSX.utils.json_to_sheet(detail); ws2['!cols']=autoWidth(detail);
+  XLSX.utils.book_append_sheet(wb,ws1,'Ringkasan PO');
+  XLSX.utils.book_append_sheet(wb,ws2,'Detail Item PO');
+  XLSX.writeFile(wb,'Historis-PO-'+dd2(iso())+'.xlsx');
+  toast('Excel PO berhasil diunduh');
+}
+
+function reportHeader(d,title){
+  const logoW=32, logoH=logoW/COMPANY_LOGO_RATIO;
+  d.addImage(COMPANY_LOGO,'PNG',14,10,logoW,logoH);
+  d.setFont('helvetica','bold'); d.setFontSize(14); d.text(title,d.internal.pageSize.getWidth()-14,17,{align:'right'});
+  d.setFont('helvetica','normal'); d.setFontSize(8.5); d.text('Dicetak: '+dt(iso()),d.internal.pageSize.getWidth()-14,23,{align:'right'});
+  d.setDrawColor(30,64,120); d.setLineWidth(0.6); d.line(14,10+logoH+4,d.internal.pageSize.getWidth()-14,10+logoH+4);
+  return 10+logoH+11;
+}
+
+function exportPRPdf(){
+  if(!pdfReady()) return toast('Library PDF belum termuat (perlu koneksi internet)');
+  const prs = S.prs;
+  if(!prs.length) return toast('Belum ada data PR');
+  const {jsPDF}=window.jspdf; const d=new jsPDF({unit:'mm',format:'a4',orientation:'landscape'});
+  const startY = reportHeader(d,'Laporan Historis Purchase Request');
+  d.autoTable({startY,
+    head:[['No PR','Tanggal','Pemohon','Kode Unit','Dept','Prioritas','Item','Status','Head Dept']],
+    body:prs.map(x=>[x.no,dd(x.date),x.requester||'-',x.unitCode||'-',x.dept||'-',x.priority||'-',summaryPlain(x.items),(PR_ST[x.status]||[x.status])[0],x.deptHeadName||'-']),
+    styles:{fontSize:8,cellPadding:2},headStyles:{fillColor:[30,64,120]},
+    columnStyles:{6:{cellWidth:60}}
+  });
+  let y=d.lastAutoTable.finalY+8;
+  d.setFont('helvetica','normal'); d.setFontSize(8.5); d.text('Total data: '+prs.length+' Purchase Request',14,y);
+  d.save('Laporan-PR-'+dd2(iso())+'.pdf');
+}
+
+function exportPOPdf(){
+  if(!pdfReady()) return toast('Library PDF belum termuat (perlu koneksi internet)');
+  const pos = S.pos;
+  if(!pos.length) return toast('Belum ada data PO');
+  const {jsPDF}=window.jspdf; const d=new jsPDF({unit:'mm',format:'a4',orientation:'landscape'});
+  const startY = reportHeader(d,'Laporan Historis Purchase Order');
+  const grandTotal = pos.reduce((s,x)=>s+(x.total||0),0);
+  d.autoTable({startY,
+    head:[['No PO','Tanggal','Supplier','Dept Req','Subtotal','Diskon','PPN','Ongkir','Total','Status','Pembayaran']],
+    body:pos.map(x=>[x.no,dd(x.date),x.supplier||'-',x.deptReq||'-',fmt(x.subtotal,2),fmt(x.discount,2),fmt(x.ppn,2),fmt(x.shipping,2),fmt(x.total,2),(PO_ST[x.status]||[x.status])[0],x.payment?x.payment.method:'-']),
+    styles:{fontSize:7.5,cellPadding:2},headStyles:{fillColor:[30,64,120]},
+    columnStyles:{4:{halign:'right'},5:{halign:'right'},6:{halign:'right'},7:{halign:'right'},8:{halign:'right'}}
+  });
+  let y=d.lastAutoTable.finalY+8;
+  d.setFont('helvetica','bold'); d.setFontSize(9.5); d.text('Total data: '+pos.length+' PO   |   Grand Total: '+rp(grandTotal),14,y);
+  d.save('Laporan-PO-'+dd2(iso())+'.pdf');
+}
+
 /* ============ Login, logout, realtime sync ============ */
 function showAuthScreen(msg){
   $('#authScreen').style.display = 'flex';
