@@ -206,7 +206,7 @@ label.f{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;font-w
 <div class="mainwrap">
   <div class="topbar2">
     <button class="hamb2" onclick="toggleSide(true)">☰</button>
-    <div class="tb-search"><span class="ic">🔍</span><input id="tb-search-input" placeholder="Cari PR, PO, atau nomor dokumen..." onkeydown="if(event.key==='Enter')doSearch()"></div>
+    <div class="tb-search"><span class="ic">🔍</span><input id="tb-search-input" type="search" name="doc-search-q" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Cari PR, PO, atau nomor dokumen..." onkeydown="if(event.key==='Enter')doSearch()"></div>
     <div class="tb-spacer"></div>
     <button class="tb-bell" id="tb-refresh" title="Refresh data" onclick="manualRefresh()">🔄</button>
     <button class="tb-bell" title="Perlu tindakan" onclick="setTab('dashboard')"><span id="tb-bell-ic">🔔</span><span class="dot" id="tb-bell-dot" style="display:none"></span></button>
@@ -349,8 +349,8 @@ const toPR = r => ({id:r.id, no:r.no, date:r.date, requester:r.requester, unitCo
 const fromPR = d => ({id:d.id, no:d.no, date:d.date, requester:d.requester, unit_code:d.unitCode, dept:d.dept, purpose:d.purpose, priority:d.priority, need_by:d.needBy||null, items:d.items||[], status:d.status, dept_head_name:d.deptHeadName||null, history:d.history||[]});
 const toWR = r => ({id:r.id, no:r.no, date:r.date, requester:r.requester, unitCode:r.unit_code, dept:r.dept, purpose:r.purpose, needBy:r.need_by||'', items:r.items||[], status:r.status, deptHeadName:r.dept_head_name, history:r.history||[]});
 const fromWR = d => ({id:d.id, no:d.no, date:d.date, requester:d.requester, unit_code:d.unitCode, dept:d.dept, purpose:d.purpose, need_by:d.needBy||null, items:d.items||[], status:d.status, dept_head_name:d.deptHeadName||null, history:d.history||[]});
-const toSRC = r => ({id:r.id, no:r.no, srcType:r.src_type, srcId:r.src_id, refNo:r.ref_no, date:r.date, items:r.items||[], quotes:r.quotes||[], status:r.status, poId:r.po_id, chosen:r.chosen, history:r.history||[]});
-const fromSRC = d => ({id:d.id, no:d.no, src_type:d.srcType, src_id:d.srcId, ref_no:d.refNo, date:d.date, items:d.items||[], quotes:d.quotes||[], status:d.status, po_id:d.poId||null, chosen:d.chosen||null, history:d.history||[]});
+const toSRC = r => ({id:r.id, no:r.no, srcType:r.src_type, srcId:r.src_id, refNo:r.ref_no, date:r.date, items:r.items||[], quotes:r.quotes||[], status:r.status, poId:r.po_id, chosen:r.chosen, poIds:r.po_ids||(r.po_id?[r.po_id]:[]), itemStatus:r.item_status||null, history:r.history||[]});
+const fromSRC = d => ({id:d.id, no:d.no, src_type:d.srcType, src_id:d.srcId, ref_no:d.refNo, date:d.date, items:d.items||[], quotes:d.quotes||[], status:d.status, po_id:d.poId||null, chosen:d.chosen||null, po_ids:d.poIds||[], item_status:d.itemStatus||null, history:d.history||[]});
 const toPO = r => ({id:r.id, no:r.no, date:r.date, srcId:r.src_id, supplier:r.supplier, supplierAddress:r.supplier_address, supplierFax:r.supplier_fax, supplierAttn:r.supplier_attn, quoteNo:r.quote_no, deptReq:r.dept_req, leadDays:r.lead_days, items:r.items||[], subtotal:r.subtotal, discount:r.discount, ppn:r.ppn, shipping:r.shipping, total:r.total, narrative:r.narrative, reason:r.reason, needsDirector:r.needs_director, status:r.status, quoteFileName:r.quote_file_name, quoteFileData:r.quote_file_data, payment:r.payment, receiving:r.receiving, history:r.history||[]});
 const fromPO = d => ({id:d.id, no:d.no, date:d.date, src_id:d.srcId||null, supplier:d.supplier, supplier_address:d.supplierAddress||null, supplier_fax:d.supplierFax||null, supplier_attn:d.supplierAttn||null, quote_no:d.quoteNo||null, dept_req:d.deptReq||null, lead_days:d.leadDays||null, items:d.items||[], subtotal:d.subtotal||0, discount:d.discount||0, ppn:d.ppn||0, shipping:d.shipping||0, total:d.total||0, narrative:d.narrative||null, reason:d.reason||null, needs_director:!!d.needsDirector, status:d.status, quote_file_name:d.quoteFileName||null, quote_file_data:d.quoteFileData||null, payment:d.payment||null, receiving:d.receiving||null, history:d.history||[]});
 
@@ -418,9 +418,22 @@ function nextNo(type){
 const coll = t => ({pr:S.prs,wr:S.wrs,src:S.src,po:S.pos}[t]);
 const find = (t,id) => coll(t).find(x=>x.id===id);
 function mkSrc(srcType,doc,items){
-  const s = {id:uid(),no:nextNo('SRC'),srcType,srcId:doc.id,refNo:doc.no,date:iso(),items,quotes:[],status:'OPEN',poId:null,history:[]};
+  const s = {id:uid(),no:nextNo('SRC'),srcType,srcId:doc.id,refNo:doc.no,date:iso(),items,quotes:[],status:'OPEN',poId:null,poIds:[],itemStatus:items.map(()=>null),history:[]};
   hist(s,'Masuk antrian Purchasing','Sumber: '+doc.no);
   S.src.unshift(s); return s;
+}
+function srcItemStatus(s){
+  if(!s.itemStatus || s.itemStatus.length!==s.items.length) s.itemStatus = s.items.map(()=>null);
+  return s.itemStatus;
+}
+function srcOutstandingIdx(s){ return srcItemStatus(s).reduce((a,v,i)=>{ if(!v) a.push(i); return a; },[]); }
+function prReadyToClose(pr){
+  const s = S.src.find(x=>x.srcType==='PR' && x.srcId===pr.id);
+  if(!s) return false;
+  if(srcOutstandingIdx(s).length>0) return false;
+  const poIds = (s.poIds&&s.poIds.length) ? s.poIds : (s.poId?[s.poId]:[]);
+  if(!poIds.length) return false;
+  return poIds.every(pid=>{ const po=find('po',pid); return po && ['APPROVED','SENT','RECEIVED'].includes(po.status); });
 }
 function poCurrentApproverKey(po){
   if(po.status==='PENDING_MGMT') return 'mgmt1';
@@ -689,40 +702,59 @@ function docModal(t,id){
     }
     const links = S.src.filter(s=>s.srcId===d.id);
     if(links.length){
-      h += `<div class="sec"><h4>Tindak lanjut pembelian</h4>${links.map(s=>`<div class="row"><span>${esc(s.no)} ${badge(SRC_ST,s.status)}</span>${linkBtn('src',s,'Lihat quotation')}${s.poId?linkBtn('po',{id:s.poId},'Lihat PO'):''}</div>`).join('')}</div>`;
+      h += `<div class="sec"><h4>Tindak lanjut pembelian</h4>${links.map(s=>{ const poIds=(s.poIds&&s.poIds.length)?s.poIds:(s.poId?[s.poId]:[]); const outCnt=srcOutstandingIdx(s).length; return `<div class="row"><span>${esc(s.no)} ${badge(SRC_ST,s.status)}${outCnt?` <span class="badge b-warn">${outCnt} item outstanding</span>`:''}</span>${linkBtn('src',s,'Lihat quotation')}${poIds.map(pid=>linkBtn('po',{id:pid},'Lihat PO')).join('')}</div>`; }).join('')}</div>`;
     }
     if(!wr && can('purchasing') && !['CLOSED','REJECTED','CANCELLED'].includes(d.status)) h += cancelBox('pr',d.id);
     h += timeline(d);
   }
   else if(t==='src'){
     const ref = (d.srcType==='PR'?S.prs:S.wrs).find(x=>x.id===d.srcId);
-    const lowest = d.quotes.length ? Math.min(...d.quotes.map(q=>qTotal(d,q))) : null;
+    const itemStatus = srcItemStatus(d);
+    const outIdx = srcOutstandingIdx(d);
+    const coverCount = q => coverCountQ(d,q);
+    const fullCoverQuotes = d.quotes.filter(q=>outIdx.length>0 && coverCount(q)===outIdx.length);
+    const lowest = fullCoverQuotes.length ? Math.min(...fullCoverQuotes.map(q=>qTotalOutstanding(d,q))) : null;
     h += `<h3>${esc(d.no)} ${badge(SRC_ST,d.status)}</h3>`;
     h += metaBox([['Sumber',`${esc(d.refNo)} ${ref?linkBtn(d.srcType.toLowerCase(),ref,'Buka'):''}`],['Tanggal masuk',dt(d.date)],['Jumlah quotation',d.quotes.length]]);
-    h += `<div class="sec"><h4>Item yang dicari</h4><div class="tw"><table><thead><tr><th>#</th><th>Item</th><th>Spesifikasi</th><th class="r">Qty</th><th>Sat</th></tr></thead><tbody>${d.items.map((it,i)=>`<tr><td>${i+1}</td><td>${esc(it.name)}</td><td>${esc(it.spec||'-')}</td><td class="r">${fmt(it.qty)}</td><td>${esc(it.uom)}</td></tr>`).join('')}</tbody></table></div></div>`;
+    h += `<div class="sec"><h4>Item yang dicari</h4><div class="tw"><table><thead><tr><th>#</th><th>Item</th><th>Spesifikasi</th><th class="r">Qty</th><th>Sat</th><th>Status</th></tr></thead><tbody>${d.items.map((it,i)=>{
+      const covPo = itemStatus[i] && itemStatus[i].poId ? find('po',itemStatus[i].poId) : null;
+      const stCell = covPo ? `<span class="badge b-ok">PO Terbit</span> ${linkBtn('po',covPo,covPo.no)}` : `<span class="badge b-warn">Outstanding</span>`;
+      return `<tr><td>${i+1}</td><td>${esc(it.name)}</td><td>${esc(it.spec||'-')}</td><td class="r">${fmt(it.qty)}</td><td>${esc(it.uom)}</td><td>${stCell}</td></tr>`;
+    }).join('')}</tbody></table></div></div>`;
     h += `<div class="sec"><h4>Perbandingan quotation</h4>`;
+    if(outIdx.length===0 && d.items.length>0){
+      h += `<div class="hint" style="margin-bottom:8px">Semua item pada quotation ini sudah memiliki PO.</div>`;
+    }
     if(d.quotes.length){
-      h += `<div class="tw"><table><thead><tr>${d.status==='OPEN'&&can('purchasing')?'<th></th>':''}<th>Supplier</th><th>Lead time</th><th class="r">Total</th><th>Catatan</th><th>Dokumen</th><th></th></tr></thead><tbody>
-      ${d.quotes.map(q=>{const tot=qTotal(d,q);return `<tr class="${tot===lowest?'lowest':''}">${d.status==='OPEN'&&can('purchasing')?`<td><input type="radio" name="win" value="${q.id}" ${tot===lowest?'checked':''} onchange="updatePpnAuto('${d.id}')"></td>`:''}<td><b>${esc(q.supplier)}</b>${tot===lowest?' <span class="badge b-ok">Termurah</span>':''}${d.poId&&d.chosen===q.id?' <span class="badge b-info">Dipilih</span>':''}</td><td>${q.leadDays?q.leadDays+' hari':'-'}</td><td class="r">${rp(tot)}</td><td>${esc(q.note||'')}</td><td>${fileLink(q.fileName,q.fileData)}</td><td>${d.status==='OPEN'&&can('purchasing')?`<button class="btn sm bad" onclick="delQuote('${d.id}','${q.id}')">Hapus</button>`:''}</td></tr>`;}).join('')}
+      h += `<div class="tw"><table><thead><tr>${d.status==='OPEN'&&can('purchasing')&&outIdx.length?'<th></th>':''}<th>Supplier</th><th>Cakupan item outstanding</th><th>Lead time</th><th class="r">Total (item tercakup)</th><th>Catatan</th><th>Dokumen</th><th></th></tr></thead><tbody>
+      ${d.quotes.map(q=>{const tot=qTotalOutstanding(d,q); const cc=coverCount(q); const isFull=outIdx.length>0&&cc===outIdx.length; const isLowest=isFull&&tot===lowest;
+        const coverLabel = outIdx.length ? `${cc}/${outIdx.length} item${isFull?'':''}` : '-';
+        return `<tr class="${isLowest?'lowest':''}">${d.status==='OPEN'&&can('purchasing')&&outIdx.length?`<td><input type="radio" name="win" value="${q.id}" ${isLowest||(!fullCoverQuotes.length&&cc>0&&q===d.quotes.find(x=>coverCount(x)>0))?'checked':''} ${cc===0?'disabled':''}></td>`:''}<td><b>${esc(q.supplier)}</b>${isLowest?' <span class="badge b-ok">Termurah</span>':''}${!isFull&&cc>0?' <span class="badge b-warn">Sebagian</span>':''}${cc===0?' <span class="badge b-gray">Tidak relevan lagi</span>':''}${d.chosen===q.id?' <span class="badge b-info">Pernah dipilih</span>':''}</td><td>${coverLabel}</td><td>${q.leadDays?q.leadDays+' hari':'-'}</td><td class="r">${rp(tot)}</td><td>${esc(q.note||'')}</td><td>${fileLink(q.fileName,q.fileData)}</td><td>${d.status==='OPEN'&&can('purchasing')?`<button class="btn sm bad" onclick="delQuote('${d.id}','${q.id}')">Hapus</button>`:''}</td></tr>`;}).join('')}
       </tbody></table></div>`;
     } else h += `<div class="empty">Belum ada quotation.</div>`;
     h += `</div>`;
-    if(d.status==='OPEN' && can('purchasing')){
+    if(d.status==='OPEN' && can('purchasing') && outIdx.length){
       h += `<div class="btns"><button class="btn" onclick="formQuote('${d.id}')">+ Tambah quotation</button></div>`;
-      if(d.quotes.length){
-        const defQ = d.quotes.find(q=>qTotal(d,q)===lowest) || d.quotes[0];
-        const defPpn = Math.round(lowest*0.11);
+      const relevantQ = d.quotes.filter(q=>coverCount(q)>0);
+      if(relevantQ.length){
+        const defQ = fullCoverQuotes.find(q=>qTotalOutstanding(d,q)===lowest) || relevantQ[0];
+        const defTotal = qTotalOutstanding(d,defQ);
+        const defPpn = Math.round(defTotal*0.11);
         h += `<div class="decide"><b>Buat PO dari quotation terpilih</b>
+          <div class="hint" style="margin-bottom:6px">PO hanya akan dibuat untuk item yang tercakup quotation yang dipilih. Item lain yang belum dapat quotation tetap outstanding di sini, menunggu penawaran berikutnya.</div>
           <div class="row" style="margin-top:8px"><div><label class="f">Diskon (Rp)</label><input id="po-disc" inputmode="decimal" placeholder="0" oninput="fmtInput(this);updatePpnAuto('${d.id}')"></div><div><label class="f">Biaya pengiriman (Rp)</label><input id="po-ship" inputmode="decimal" placeholder="0" oninput="fmtInput(this)"></div></div>
           <div class="row"><div><label class="f"><input type="checkbox" id="po-ppn-on" checked onchange="updatePpnAuto('${d.id}')" style="width:auto;vertical-align:middle;margin-right:4px">Kena PPN</label></div><div><label class="f">Bantu hitung dari rate (%)</label><input id="po-ppn-rate" inputmode="decimal" value="11" style="width:80px" oninput="updatePpnAuto('${d.id}')"></div><div><label class="f">PPN (Rp) — bisa diisi manual</label><input id="po-ppn-amt" inputmode="decimal" value="${fmt(defPpn)}" style="width:130px"></div></div>
           <label class="f">Alasan pemilihan (wajib bila bukan yang termurah)</label><textarea id="po-reason" placeholder="mis. stok tersedia, lead time lebih cepat"></textarea>
           <label class="f">Naratif PO (alasan/keperluan pembelian — tampil di PO PDF) *</label><textarea id="po-narrative" placeholder="mis. penggantian komponen AC cabin unit DT-14 yang rusak">${esc(ref?ref.purpose:'')}</textarea>
           <div class="btns"><button class="btn pri" onclick="createPO('${d.id}')">Buat PO & kirim ke Manajemen</button></div></div>`;
-      } else h += `<div class="hint" style="margin-top:6px">Tambahkan minimal satu quotation (disarankan lebih dari satu supplier).</div>`;
-    } else if(d.status==='OPEN'){
+      } else h += `<div class="hint" style="margin-top:6px">Tambahkan minimal satu quotation untuk item yang masih outstanding.</div>`;
+    } else if(d.status==='OPEN' && outIdx.length){
       h += `<div class="warnbox">Menunggu Purchasing menyelesaikan quotation dan membuat PO.</div>`;
     }
-    if(d.poId) h += `<div class="sec"><h4>Purchase Order</h4>${linkBtn('po',{id:d.poId},'Lihat PO')}</div>`;
+    if((d.poIds&&d.poIds.length) || d.poId){
+      const allPoIds = d.poIds&&d.poIds.length ? d.poIds : (d.poId?[d.poId]:[]);
+      h += `<div class="sec"><h4>Purchase Order${allPoIds.length>1?' (bertahap sesuai item)':''}</h4>${allPoIds.map(pid=>{ const po=find('po',pid); return po?`<div class="row">${linkBtn('po',po,po.no)}<span class="hint">${esc(po.supplier)} — ${badge(ST.po,po.status)}</span></div>`:''; }).join('')}</div>`;
+    }
     h += timeline(d);
   }
   else if(t==='po'){
@@ -965,6 +997,8 @@ function issueWR(){
 
 /* ============ Quotation & PO ============ */
 const qTotal = (src,q) => src.items.reduce((s,it,i)=>s+it.qty*(q.prices[i]||0),0);
+const qTotalOutstanding = (src,q) => srcOutstandingIdx(src).reduce((s,i)=>s+(q.prices[i]>0?src.items[i].qty*q.prices[i]:0),0);
+const coverCountQ = (src,q) => srcOutstandingIdx(src).filter(i=>q.prices[i]>0).length;
 function knownSuppliers(){
   const names = new Set(SUPPLIERS);
   (S.suppliers||[]).forEach(x=>names.add(x.name));
@@ -992,22 +1026,25 @@ function rememberSupplier(q){
 }
 function formQuote(srcId){
   const s=find('src',srcId);
+  const outIdx = srcOutstandingIdx(s);
   showModal(`<h3>Tambah quotation — ${esc(s.no)}</h3>
   <label class="f">Supplier *</label><input id="q-sup" list="sups" class="grow" style="width:100%" placeholder="Nama supplier" oninput="fillSupplierInfo(this.value)"><datalist id="sups">${knownSuppliers().map(x=>`<option value="${esc(x)}">`).join('')}</datalist>
   <label class="f">Alamat Supplier</label><textarea id="q-addr" placeholder="Alamat lengkap supplier"></textarea>
   <div class="row"><div><label class="f">Lead time (hari)</label><input id="q-lead" inputmode="numeric" style="width:120px"></div><div><label class="f">No. Fax</label><input id="q-fax" style="width:150px"></div><div><label class="f">Attn (PIC)</label><input id="q-attn" style="width:180px"></div><div><label class="f">No. Quotation</label><input id="q-qno" style="width:150px"></div></div>
   <div class="hint" style="margin-top:-6px;margin-bottom:8px">Ketik/pilih nama supplier yang sudah pernah dipakai untuk mengisi otomatis alamat, fax &amp; attn.</div>
-  <label class="f">Harga satuan per item (Rp) *</label>
-  <div class="tw"><table><tbody>${s.items.map((it,i)=>`<tr><td>${esc(it.name)}<br><span class="hint">${fmt(it.qty)} ${esc(it.uom)}</span></td><td><input class="q-price" data-i="${i}" inputmode="decimal" placeholder="0" style="width:150px" oninput="fmtInput(this)"></td></tr>`).join('')}</tbody></table></div>
+  <label class="f">Harga satuan per item (Rp)</label>
+  <div class="hint" style="margin-top:-4px;margin-bottom:6px">Kosongkan item yang tidak ditawarkan supplier ini — PO nanti hanya dibuat untuk item yang ada harganya, sisanya tetap outstanding menunggu quotation lain.</div>
+  <div class="tw"><table><tbody>${outIdx.map(i=>s.items[i]).map((it,k)=>`<tr><td>${esc(it.name)}<br><span class="hint">${fmt(it.qty)} ${esc(it.uom)}</span></td><td><input class="q-price" data-i="${outIdx[k]}" inputmode="decimal" placeholder="Tidak ditawarkan" style="width:150px" oninput="fmtInput(this)"></td></tr>`).join('')}</tbody></table></div>
   <label class="f">Catatan</label><textarea id="q-note" placeholder="mis. garansi, syarat pembayaran, ketersediaan"></textarea>
   <label class="f">Upload Dokumen Quotation (PDF/gambar)</label><input type="file" id="q-file" accept="image/*,.pdf"><div class="hint">Opsional — surat penawaran dari supplier, memudahkan approver mengevaluasi.</div>
   <div class="btns" style="margin-top:12px"><button class="btn pri" onclick="submitQuote('${s.id}')">Simpan quotation</button><button class="btn" onclick="openDoc('src','${s.id}')">Batal</button></div>`);
 }
 function submitQuote(srcId){
   const s=find('src',srcId); const supplier=$('#q-sup').value.trim();
-  const prices=[...document.querySelectorAll('.q-price')].map(i=>parseNum(i.value));
+  const prices=s.items.map(()=>null);
+  [...document.querySelectorAll('.q-price')].forEach(inp=>{ const i=Number(inp.dataset.i); const v=parseNum(inp.value); prices[i] = v>0 ? v : null; });
   if(!supplier) return toast('Isi nama supplier');
-  if(prices.some(p=>p<=0)) return toast('Isi harga satuan untuk semua item');
+  if(prices.every(p=>!p)) return toast('Isi harga satuan untuk minimal satu item');
   const quote={id:uid(),supplier,address:$('#q-addr').value.trim(),fax:$('#q-fax').value.trim(),attn:$('#q-attn').value.trim(),quoteNo:$('#q-qno').value.trim(),leadDays:parseNum($('#q-lead').value),note:$('#q-note').value.trim(),prices};
   const finalizeQuote = (file) => {
     if(file){ quote.fileName=file.name; quote.fileData=file.data; }
@@ -1029,9 +1066,9 @@ function delQuote(srcId,qid){ const s=find('src',srcId); s.quotes=s.quotes.filte
 function updatePpnAuto(srcId){
   const s=find('src',srcId); if(!s) return;
   const sel=document.querySelector('input[name=win]:checked');
-  const q = sel ? s.quotes.find(x=>x.id===sel.value) : s.quotes[0];
+  const q = sel ? s.quotes.find(x=>x.id===sel.value) : s.quotes.find(x=>coverCountQ(s,x)>0);
   if(!q) return;
-  const subtotal=qTotal(s,q);
+  const subtotal=qTotalOutstanding(s,q);
   const discount=parseNum($('#po-disc')?.value);
   const ppnOn=$('#po-ppn-on')?.checked!==false;
   const rate=parseNum($('#po-ppn-rate')?.value ?? '11');
@@ -1043,15 +1080,21 @@ function createPO(srcId){
   const s=find('src',srcId); const sel=document.querySelector('input[name=win]:checked');
   if(!sel) return toast('Pilih quotation pemenang');
   const q=s.quotes.find(x=>x.id===sel.value);
-  const lowest=Math.min(...s.quotes.map(x=>qTotal(s,x)));
+  if(!q) return;
+  const itemStatus = srcItemStatus(s);
+  const targetIdx = srcOutstandingIdx(s).filter(i=>q.prices[i]>0);
+  if(!targetIdx.length) return toast('Quotation ini tidak mencakup item yang masih outstanding');
+  const fullCoverQuotes = s.quotes.filter(x=>coverCountQ(s,x)===srcOutstandingIdx(s).length);
+  const lowest = fullCoverQuotes.length ? Math.min(...fullCoverQuotes.map(x=>qTotalOutstanding(s,x))) : null;
+  const isFull = coverCountQ(s,q)===srcOutstandingIdx(s).length;
   const reason=$('#po-reason').value.trim();
-  if(qTotal(s,q)>lowest && !reason) return toast('Isi alasan pemilihan karena bukan quotation termurah');
+  if(isFull && lowest!==null && qTotalOutstanding(s,q)>lowest && !reason) return toast('Isi alasan pemilihan karena bukan quotation termurah');
   const narrative=($('#po-narrative')?.value||'').trim();
   if(!narrative) return toast('Isi naratif PO (alasan/keperluan pembelian)');
   const discount=parseNum($('#po-disc').value), shipping=parseNum($('#po-ship').value);
   const ppnOn=$('#po-ppn-on')?.checked!==false; const ppnRate=parseNum($('#po-ppn-rate')?.value ?? '11');
   const ppn=ppnOn?parseNum($('#po-ppn-amt')?.value):0;
-  const items=s.items.map((it,i)=>({name:it.name,spec:it.spec,qty:it.qty,uom:it.uom,price:q.prices[i]}));
+  const items=targetIdx.map(i=>({name:s.items[i].name,spec:s.items[i].spec,qty:s.items[i].qty,uom:s.items[i].uom,price:q.prices[i]}));
   const subtotal=items.reduce((a,it)=>a+it.qty*it.price,0);
   const dpp=Math.max(0,subtotal-discount);
   const total=dpp+ppn+shipping;
@@ -1062,15 +1105,28 @@ function createPO(srcId){
   const needsDirector = total>LIMIT;
   const po={id:uid(),no:nextNo('PO'),srcId:s.id,supplier:q.supplier,supplierAddress:q.address||'',supplierFax:q.fax||'',supplierAttn:q.attn||'',quoteNo:q.quoteNo||'',quoteFileName:q.fileName||'',quoteFileData:q.fileData||'',deptReq,purpose,narrative,leadDays:q.leadDays,items,discount,ppnRate:ppnOn?ppnRate:0,ppn,shipping,subtotal,total,reason,date:iso(),needsDirector,status:'PENDING_MGMT',history:[]};
   hist(po,'PO dibuat',`Diajukan ke ${ROLES.mgmt1.name} (Project Manajer)`);
-  S.pos.unshift(po); s.status='PO_CREATED'; s.poId=po.id; s.chosen=q.id; hist(s,'PO dibuat',po.no);
-  if(s.srcType==='PR'){ const pr=find('pr',s.srcId); if(pr){ pr.status='PO_PROCESS'; hist(pr,'PO dibuat',po.no); } }
+  S.pos.unshift(po);
+  targetIdx.forEach(i=>{ itemStatus[i]={poId:po.id}; });
+  s.itemStatus = itemStatus;
+  s.poIds = (s.poIds||[]).concat([po.id]); s.poId=po.id; s.chosen=q.id;
+  const stillOutstanding = srcOutstandingIdx(s).length>0;
+  s.status = stillOutstanding ? 'OPEN' : 'PO_CREATED';
+  const itemNames = items.map(it=>it.name).join(', ');
+  hist(s,'PO dibuat untuk sebagian item'+(stillOutstanding?' (masih ada item outstanding)':' (semua item tercakup)'),po.no+' — '+itemNames);
+  if(s.srcType==='PR'){ const pr=find('pr',s.srcId); if(pr){ pr.status='PO_PROCESS'; hist(pr,'PO dibuat',po.no+(stillOutstanding?' — sebagian item, sisanya masih outstanding':'')); } }
   else { const wr=find('wr',s.srcId); if(wr) hist(wr,'PO dibuat untuk item tidak ready',po.no); }
-  save(); openDoc('po',po.id); render(); toast(po.no+' menunggu approval');
+  save(); openDoc('po',po.id); render(); toast(po.no+' menunggu approval'+(stillOutstanding?' — item lain tetap outstanding':''));
 }
 function resetSrcAfterRejectPO(po,note,who){
   const s=S.src.find(x=>x.id===po.srcId);
   if(!s) return;
-  s.status='OPEN'; s.poId=null; s.chosen=null; hist(s,'PO ditolak '+who,note);
+  const itemStatus = srcItemStatus(s);
+  let reverted = 0;
+  itemStatus.forEach((v,i)=>{ if(v && v.poId===po.id){ itemStatus[i]=null; reverted++; } });
+  s.itemStatus = itemStatus;
+  s.poIds = (s.poIds||[]).filter(pid=>pid!==po.id);
+  s.status='OPEN'; s.poId = s.poIds.length?s.poIds[s.poIds.length-1]:null; s.chosen=null;
+  hist(s,'PO ditolak '+who,note+(reverted?` — ${reverted} item kembali outstanding`:''));
   if(s.srcType==='PR'){ const pr=find('pr',s.srcId); if(pr){ pr.status='SOURCING'; hist(pr,'PO ditolak '+who,note); } }
   else { const wr=find('wr',s.srcId); if(wr) hist(wr,'PO ditolak '+who,note); }
 }
@@ -1109,7 +1165,7 @@ function decidePO(act,note){
         po.payment={method,ref,date:iso(),proofName:proof?proof.name:null,proofData:proof?proof.data:null};
         po.status='APPROVED'; hist(po,'Pembayaran diproses Finance',`${method}${ref?(' — Ref: '+ref):''}${proof?' — bukti: '+proof.name:''}`+(note?' — '+note:''));
         const s=S.src.find(x=>x.id===po.srcId);
-        if(s){ if(s.srcType==='PR'){ const pr=find('pr',s.srcId); if(pr){ pr.status='CLOSED'; hist(pr,'PO terbit',po.no); } } else { const wr=find('wr',s.srcId); if(wr) hist(wr,'PO terbit',po.no); } }
+        if(s){ if(s.srcType==='PR'){ const pr=find('pr',s.srcId); if(pr){ if(prReadyToClose(pr)){ pr.status='CLOSED'; hist(pr,'Semua item PR sudah di-PO & dibayar — PR ditutup',po.no); } else { hist(pr,'PO dibayar',po.no+' — masih ada item lain yang outstanding/menunggu PO'); } } } else { const wr=find('wr',s.srcId); if(wr) hist(wr,'PO terbit',po.no); } }
         refresh(); toast('Tersimpan');
       };
       if(file && typeof FileReader!=='undefined'){
@@ -1161,7 +1217,10 @@ async function receivePO(id){
   const s=S.src.find(x=>x.id===po.srcId);
   if(s && s.srcType==='PR'){
     const pr=find('pr',s.srcId);
-    if(pr && pr.status!=='CLOSED'){ pr.status='CLOSED'; hist(pr,'PO diterima — PR ditutup',po.no); }
+    if(pr && pr.status!=='CLOSED'){
+      if(prReadyToClose(pr)){ pr.status='CLOSED'; hist(pr,'PO diterima — PR ditutup',po.no); }
+      else hist(pr,'PO diterima',po.no+' — masih ada item lain yang outstanding/menunggu PO');
+    }
   }
   refresh(); toast('PO ditutup — barang diterima');
 }
