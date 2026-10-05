@@ -262,8 +262,11 @@ const ROLES = {
 };
 const LIMIT = 5000000;
 const DEPTS = ['PLANT-SM','PRODUKSI','HSE','ENGINEERING','HRGA'];
-function deptHeadLabel(dept){ return {'PLANT-SM':'Head Plant-SM','PRODUKSI':'Head Produksi','HSE':'Head HSE','ENGINEERING':'Head Engineering','HRGA':'Head HRGA'}[dept] || 'Head Departemen'; }
-const DEPT_ROLE = {'PLANT-SM':'dh_plantsm','HSE':'dh_hse','PRODUKSI':'dh_produksi','ENGINEERING':'dh_engineering','HRGA':'dh_hrga'};
+// Options shown in the create/revise dropdown: PLANT-SM is split into PLANT and SM for selection,
+// but both still resolve (via DEPT_ROLE below) to the single combined Plant-SM department-head approver.
+const DEPT_OPTIONS = ['PLANT','SM','PRODUKSI','HSE','ENGINEERING','HRGA'];
+function deptHeadLabel(dept){ return {'PLANT-SM':'Head Plant-SM','PLANT':'Head Plant-SM','SM':'Head Plant-SM','PRODUKSI':'Head Produksi','HSE':'Head HSE','ENGINEERING':'Head Engineering','HRGA':'Head HRGA'}[dept] || 'Head Departemen'; }
+const DEPT_ROLE = {'PLANT-SM':'dh_plantsm','PLANT':'dh_plantsm','SM':'dh_plantsm','HSE':'dh_hse','PRODUKSI':'dh_produksi','ENGINEERING':'dh_engineering','HRGA':'dh_hrga'};
 function canApproveDept(dept){ return role==='admin' || role===DEPT_ROLE[dept]; }
 function canDownloadHistoris(){ return can('purchasing') || can('planner') || can('dh_plantsm'); }
 const LOGIN_ACCOUNTS = [
@@ -384,20 +387,34 @@ async function save(){
   if(saving){ savePending = true; return; }
   saving = true;
   try{
-    const ops = [];
-    if(S.prs.length) ops.push(sb.from('prs').upsert(S.prs.map(fromPR)));
-    if(S.wrs.length) ops.push(sb.from('wrs').upsert(S.wrs.map(fromWR)));
-    if(S.src.length) ops.push(sb.from('src').upsert(S.src.map(fromSRC)));
-    if(S.pos.length) ops.push(sb.from('pos').upsert(S.pos.map(fromPO)));
+    let firstErr = null;
+    const run = async (ops) => {
+      if(!ops.length) return;
+      const results = await Promise.all(ops);
+      const bad = results.find(r=>r && r.error);
+      if(bad && !firstErr) firstErr = bad.error;
+    };
+    // prs/wrs are the root documents that src rows reference (by src_id/ref), and src rows
+    // are in turn referenced by pos.src_id via a foreign key — so these MUST be saved in this
+    // order, awaited one group at a time, not fired all at once with Promise.all. Saving them
+    // concurrently can let a new "pos" row reach the server before its "src" row has committed,
+    // which trips the pos_src_id_fkey constraint.
+    await run([
+      S.prs.length ? sb.from('prs').upsert(S.prs.map(fromPR)) : null,
+      S.wrs.length ? sb.from('wrs').upsert(S.wrs.map(fromWR)) : null,
+    ].filter(Boolean));
+    await run([ S.src.length ? sb.from('src').upsert(S.src.map(fromSRC)) : null ].filter(Boolean));
+    await run([ S.pos.length ? sb.from('pos').upsert(S.pos.map(fromPO)) : null ].filter(Boolean));
+    // Everything below is independent of the above and of each other — fine to run in parallel.
     const sigRows = Object.entries(S.signatures||{}).filter(([k,v])=>v).map(([role,data_url])=>({role,data_url}));
-    if(sigRows.length) ops.push(sb.from('signatures').upsert(sigRows));
     const seqRows = Object.entries(S.seq||{}).map(([doc_type,value])=>({doc_type,value}));
-    if(seqRows.length) ops.push(sb.from('doc_seq').upsert(seqRows));
-    if(S.catalog && S.catalog.length) ops.push(sb.from('catalog').upsert(S.catalog.map(c=>({code:c.code,name:c.name,uom:c.uom,stock:c.stock}))));
-    if(S.suppliers && S.suppliers.length) ops.push(sb.from('suppliers').upsert(S.suppliers.map(x=>({name:x.name,address:x.address||null,fax:x.fax||null,attn:x.attn||null}))));
-    const results = await Promise.all(ops);
-    const err = results.find(r=>r && r.error);
-    if(err){ console.error(err.error); toast('Gagal menyimpan ke server: '+err.error.message); }
+    await run([
+      sigRows.length ? sb.from('signatures').upsert(sigRows) : null,
+      seqRows.length ? sb.from('doc_seq').upsert(seqRows) : null,
+      (S.catalog && S.catalog.length) ? sb.from('catalog').upsert(S.catalog.map(c=>({code:c.code,name:c.name,uom:c.uom,stock:c.stock}))) : null,
+      (S.suppliers && S.suppliers.length) ? sb.from('suppliers').upsert(S.suppliers.map(x=>({name:x.name,address:x.address||null,fax:x.fax||null,attn:x.attn||null}))) : null,
+    ].filter(Boolean));
+    if(firstErr){ console.error(firstErr); toast('Gagal menyimpan ke server: '+firstErr.message); }
   }catch(e){ console.error(e); toast('Gagal menyimpan ke server (cek koneksi)'); }
   saving = false;
   if(savePending){ savePending = false; save(); }
@@ -426,7 +443,7 @@ function srcItemStatus(s){
   if(!s.itemStatus || s.itemStatus.length!==s.items.length) s.itemStatus = s.items.map(()=>null);
   return s.itemStatus;
 }
-function srcOutstandingIdx(s){ return srcItemStatus(s).reduce((a,v,i)=>{ if(!v) a.push(i); return a; },[]); }
+function srcOutstandingIdx(s){ return srcItemStatus(s).reduce((a,v,i)=>{ if(!v && !(s.items[i]&&s.items[i].needsClarify)) a.push(i); return a; },[]); }
 function prReadyToClose(pr){
   const s = S.src.find(x=>x.srcType==='PR' && x.srcId===pr.id);
   if(!s) return false;
@@ -649,6 +666,73 @@ const decisionBox = (okL,noL) => `<div class="decide"><textarea id="note" placeh
 const decisionBoxHead = (dept,okL,noL) => `<div class="decide"><div class="hint" style="margin-bottom:8px">Menyetujui sebagai <b>${esc(actorName())}</b> (${esc(deptHeadLabel(dept))})</div><textarea id="note" placeholder="Catatan (wajib diisi bila menolak)"></textarea><div class="btns"><button class="btn ok" onclick="decide('approve')">${okL}</button><button class="btn bad" onclick="decide('reject')">${noL}</button></div></div>`;
 const linkBtn = (t,d,l) => `<button class="btn sm" onclick="openDoc('${t}','${d.id}')">${l}</button>`;
 const cancelBox = (t,id) => `<div class="decide" style="border-color:#f3c6c6"><b>Batalkan ${t==='pr'?'PR':'PO'} (Purchasing)</b><div class="hint">Pembatalan bersifat final dan akan tercatat di riwayat. Keterangan/alasan wajib diisi dengan jelas.</div><textarea id="cancel-note" placeholder="Keterangan/alasan pembatalan *" style="margin-top:6px"></textarea><div class="btns"><button class="btn bad" onclick="cancelDoc('${t}','${id}')">Batalkan ${t==='pr'?'PR':'PO'} Ini</button></div></div>`;
+const clarifyBox = (s) => {
+  // Outstanding items (no PO yet, not already flagged) are selectable to send back for clarification.
+  const idxs = srcOutstandingIdx(s);
+  if(!idxs.length) return '';
+  return `<div class="decide" style="border-color:#f3dba0"><b>Kembalikan item ke User/Planner (spesifikasi tidak jelas)</b><div class="hint">Centang item yang deskripsi/spesifikasinya belum cukup jelas untuk dicarikan quotation. Item lain yang tidak dicentang tetap lanjut diproses seperti biasa. User/Planner akan diminta melengkapi data klasifikasi yang jelas dan/atau upload gambar untuk item yang dicentang.</div>
+    <div class="tw" style="margin-top:6px"><table><thead><tr><th></th><th>Item</th><th>Spesifikasi saat ini</th></tr></thead><tbody>
+    ${idxs.map(i=>`<tr><td><input type="checkbox" class="clarify-chk" data-i="${i}"></td><td>${esc(s.items[i].name)}</td><td>${esc(s.items[i].spec||'-')}</td></tr>`).join('')}
+    </tbody></table></div>
+    <textarea id="clarify-note" placeholder="Jelaskan apa yang kurang jelas / perlu dilengkapi pada item yang dicentang *" style="margin-top:6px"></textarea>
+    <div class="btns"><button class="btn bad" onclick="returnSrcItemsClarify('${s.id}')">Kembalikan Item Terpilih untuk Klarifikasi</button></div></div>`;
+};
+function returnSrcItemsClarify(srcId){
+  if(!can('purchasing')) return toast('Hanya Purchasing yang dapat mengembalikan item untuk klarifikasi');
+  const s=find('src',srcId); if(!s) return;
+  const note=($('#clarify-note')?.value||'').trim();
+  if(!note) return toast('Jelaskan apa yang kurang jelas / perlu dilengkapi');
+  const idxs=[...document.querySelectorAll('.clarify-chk:checked')].map(c=>+c.dataset.i);
+  if(!idxs.length) return toast('Pilih minimal satu item yang spesifikasinya kurang jelas');
+  const pr = s.srcType==='PR' ? find('pr',s.srcId) : null;
+  const names=[];
+  idxs.forEach(i=>{
+    if(s.items[i]){ s.items[i].needsClarify=note; names.push(s.items[i].name); }
+    if(pr && pr.items[i]) pr.items[i].needsClarify=note;
+  });
+  hist(s,'Item dikembalikan Purchasing untuk klarifikasi spesifikasi',names.join(', ')+' — '+note);
+  if(pr) hist(pr,'Item dikembalikan Purchasing untuk klarifikasi spesifikasi',names.join(', ')+' — '+note);
+  refresh(); toast((idxs.length>1?idxs.length+' item':'1 item')+' dikembalikan untuk klarifikasi');
+}
+function prFlaggedIdx(pr){ return pr.items.reduce((a,it,i)=>{ if(it&&it.needsClarify) a.push(i); return a; },[]); }
+function formResolveClarify(prId){
+  const d=find('pr',prId); current=null;
+  const idxs=prFlaggedIdx(d);
+  if(!idxs.length) return toast('Tidak ada item yang perlu klarifikasi');
+  showModal(`<h3>Lengkapi Klarifikasi — ${esc(d.no)}</h3><div class="hint">Lengkapi spesifikasi/klasifikasi yang jelas dan/atau upload gambar kebutuhan untuk item di bawah ini, lalu kirim kembali ke Purchasing. Item lain pada PR ini tidak terganggu dan tetap berjalan.</div>
+  <div id="rows"></div>
+  <div class="btns" style="margin-top:14px"><button class="btn pri" onclick="submitResolveClarify('${prId}')">Kirim ke Purchasing</button><button class="btn" onclick="openDoc('pr','${prId}')">Batal</button></div>`);
+  idxs.forEach(i=>{
+    const it=d.items[i];
+    addPRRow(it);
+    const row=$('#rows').lastElementChild;
+    row.dataset.idx=i;
+    row.querySelector('.i-name').value=it.name; row.querySelector('.i-spec').value=it.spec||''; row.querySelector('.i-qty').value=it.qty; row.querySelector('.i-uom').value=it.uom;
+    row.insertAdjacentHTML('afterbegin',`<div class="hint" style="width:100%;margin-bottom:4px">⚠ ${esc(it.needsClarify)}</div>`);
+  });
+}
+async function submitResolveClarify(prId){
+  const d=find('pr',prId);
+  const rows=[...document.querySelectorAll('#rows .row')];
+  const s=S.src.find(x=>x.srcType==='PR' && x.srcId===d.id);
+  const names=[];
+  for(const r of rows){
+    const i=+r.dataset.idx;
+    const name=r.querySelector('.i-name').value.trim(); const qty=parseNum(r.querySelector('.i-qty').value);
+    if(!name||!qty){ toast('Lengkapi nama & qty tiap item'); return; }
+    const imgInput=r.querySelector('.i-img'); const file=imgInput&&imgInput.files&&imgInput.files[0];
+    let imageData=r.dataset.existingImg||null, imageName=r.dataset.existingImgName||null;
+    if(file){ const read=await readFileAsDataUrl(file); if(read){ imageData=read.data; imageName=read.name; } }
+    const spec=r.querySelector('.i-spec').value.trim();
+    const uom=r.querySelector('.i-uom').value.trim()||'pcs';
+    d.items[i]={...d.items[i],name,spec,qty,uom,imageData,imageName,needsClarify:null};
+    if(s && s.items[i]) s.items[i]={...s.items[i],name,spec,qty,uom,imageData,imageName,needsClarify:null};
+    names.push(name);
+  }
+  hist(d,'Klarifikasi dilengkapi User/Planner',names.join(', '));
+  if(s) hist(s,'Klarifikasi dilengkapi User/Planner',names.join(', '));
+  closeModal(); save(); setTab('pr'); toast(d.no+' — klarifikasi item terkirim ke Purchasing');
+}
 function openDataUrl(dataUrl){
   try{
     const m = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
@@ -664,6 +748,15 @@ function openDataUrl(dataUrl){
   }catch(e){ toast('Gagal membuka dokumen'); }
 }
 const fileLink = (name,data) => data ? `<button type="button" class="btn sm" onclick="openDataUrl('${data}')">👁 ${esc(name&&name.length>16?name.slice(0,14)+'…':name||'Lihat')}</button>` : '<span class="hint">-</span>';
+function readFileAsDataUrl(file){
+  return new Promise(res=>{
+    if(!file || typeof FileReader==='undefined') return res(null);
+    const r=new FileReader();
+    r.onload=()=>res({name:file.name,data:r.result});
+    r.onerror=()=>res(null);
+    r.readAsDataURL(file);
+  });
+}
 
 function docModal(t,id){
   const d = find(t,id); if(!d){ closeModal(); return; }
@@ -672,9 +765,9 @@ function docModal(t,id){
     const wr = t==='wr';
     h += `<h3>${esc(d.no)} ${badge(ST[t],d.status)}</h3>`;
     h += metaBox([['Pemohon',esc(d.requester)],['Kode Unit',esc(d.unitCode||'-')],['Departemen',esc(d.dept)],['Tanggal',dt(d.date)],...(d.priority?[['Prioritas',esc(d.priority)]]:[]),['Dibutuhkan',d.needBy?dd(d.needBy):'-'],['Keperluan',esc(d.purpose)]]);
-    h += `<div class="sec"><h4>Daftar item</h4><div class="tw"><table><thead><tr><th>#</th><th>Item</th><th>${wr?'Kode':'Spesifikasi'}</th><th class="r">Qty</th><th>Sat</th>${wr?'<th class="r">Stok</th><th class="r">Issued</th><th class="r">Sisa</th>':''}</tr></thead><tbody>
+    h += `<div class="sec"><h4>Daftar item</h4><div class="tw"><table><thead><tr><th>#</th><th>Item</th><th>${wr?'Kode':'Spesifikasi'}</th><th class="r">Qty</th><th>Sat</th>${!wr?'<th>Gambar</th><th>Status</th>':''}${wr?'<th class="r">Stok</th><th class="r">Issued</th><th class="r">Sisa</th>':''}</tr></thead><tbody>
       ${d.items.map((it,i)=>{ const c=wr?S.catalog.find(x=>x.code===it.code):null;
-        return `<tr><td>${i+1}</td><td>${esc(it.name)}</td><td>${esc(it.spec||'-')}</td><td class="r">${fmt(it.qty)}</td><td>${esc(it.uom)}</td>${wr?`<td class="r">${fmt(c?c.stock:0)}</td><td class="r">${d.status==='WH_PROCESS'||['PENDING_USER','PENDING_PM'].includes(d.status)?'-':fmt(it.issued)}</td><td class="r">${d.status==='WH_PROCESS'||['PENDING_USER','PENDING_PM'].includes(d.status)?'-':fmt(it.short)}</td>`:''}</tr>`; }).join('')}
+        return `<tr><td>${i+1}</td><td>${esc(it.name)}</td><td>${esc(it.spec||'-')}</td><td class="r">${fmt(it.qty)}</td><td>${esc(it.uom)}</td>${!wr?`<td>${fileLink(it.imageName||'Gambar',it.imageData)}</td><td>${it.needsClarify?`<span class="badge b-warn" title="${esc(it.needsClarify)}">Perlu Klarifikasi</span>`:'-'}</td>`:''}${wr?`<td class="r">${fmt(c?c.stock:0)}</td><td class="r">${d.status==='WH_PROCESS'||['PENDING_USER','PENDING_PM'].includes(d.status)?'-':fmt(it.issued)}</td><td class="r">${d.status==='WH_PROCESS'||['PENDING_USER','PENDING_PM'].includes(d.status)?'-':fmt(it.short)}</td>`:''}</tr>`; }).join('')}
     </tbody></table></div></div>`;
     if(wr && d.status!=='PENDING_USER' && d.status!=='REJECTED'){
       h += `<div class="btns"><button class="btn pri" onclick="pdfWR('${d.id}')">Cetak/Unduh Form WR</button></div>`;
@@ -700,6 +793,13 @@ function docModal(t,id){
       const who = {PENDING_USER:deptHeadLabel(d.dept),PENDING_PM:ROLES.mgmt1.label,PENDING_DIRECTOR:ROLES.mgmt2.label,WH_PROCESS:ROLES.warehouse.label}[d.status];
       h += `<div class="warnbox">Menunggu tindakan: ${esc(who)}.</div>`;
     }
+    if(!wr){
+      const flagIdx = prFlaggedIdx(d);
+      if(flagIdx.length){
+        h += `<div class="warnbox">${flagIdx.length} item pada PR ini dikembalikan Purchasing karena spesifikasi belum jelas: ${flagIdx.map(i=>`<b>${esc(d.items[i].name)}</b> (${esc(d.items[i].needsClarify)})`).join('; ')}. Item lain tetap berjalan seperti biasa.</div>`;
+        if(can('user')||can('planner')) h += `<div class="btns"><button class="btn pri" onclick="formResolveClarify('${d.id}')">Lengkapi Item yang Perlu Klarifikasi</button></div>`;
+      }
+    }
     const links = S.src.filter(s=>s.srcId===d.id);
     if(links.length){
       h += `<div class="sec"><h4>Tindak lanjut pembelian</h4>${links.map(s=>{ const poIds=(s.poIds&&s.poIds.length)?s.poIds:(s.poId?[s.poId]:[]); const outCnt=srcOutstandingIdx(s).length; return `<div class="row"><span>${esc(s.no)} ${badge(SRC_ST,s.status)}${outCnt?` <span class="badge b-warn">${outCnt} item outstanding</span>`:''}</span>${linkBtn('src',s,'Lihat quotation')}${poIds.map(pid=>linkBtn('po',{id:pid},'Lihat PO')).join('')}</div>`; }).join('')}</div>`;
@@ -716,11 +816,14 @@ function docModal(t,id){
     const lowest = fullCoverQuotes.length ? Math.min(...fullCoverQuotes.map(q=>qTotalOutstanding(d,q))) : null;
     h += `<h3>${esc(d.no)} ${badge(SRC_ST,d.status)}</h3>`;
     h += metaBox([['Sumber',`${esc(d.refNo)} ${ref?linkBtn(d.srcType.toLowerCase(),ref,'Buka'):''}`],['Tanggal masuk',dt(d.date)],['Jumlah quotation',d.quotes.length]]);
-    h += `<div class="sec"><h4>Item yang dicari</h4><div class="tw"><table><thead><tr><th>#</th><th>Item</th><th>Spesifikasi</th><th class="r">Qty</th><th>Sat</th><th>Status</th></tr></thead><tbody>${d.items.map((it,i)=>{
+    h += `<div class="sec"><h4>Item yang dicari</h4><div class="tw"><table><thead><tr><th>#</th><th>Item</th><th>Spesifikasi</th><th class="r">Qty</th><th>Sat</th><th>Gambar</th><th>Status</th></tr></thead><tbody>${d.items.map((it,i)=>{
       const covPo = itemStatus[i] && itemStatus[i].poId ? find('po',itemStatus[i].poId) : null;
-      const stCell = covPo ? `<span class="badge b-ok">PO Terbit</span> ${linkBtn('po',covPo,covPo.no)}` : `<span class="badge b-warn">Outstanding</span>`;
-      return `<tr><td>${i+1}</td><td>${esc(it.name)}</td><td>${esc(it.spec||'-')}</td><td class="r">${fmt(it.qty)}</td><td>${esc(it.uom)}</td><td>${stCell}</td></tr>`;
+      const stCell = covPo ? `<span class="badge b-ok">PO Terbit</span> ${linkBtn('po',covPo,covPo.no)}` : (it.needsClarify ? `<span class="badge b-warn" title="${esc(it.needsClarify)}">Perlu Klarifikasi</span>` : `<span class="badge b-warn">Outstanding</span>`);
+      return `<tr><td>${i+1}</td><td>${esc(it.name)}</td><td>${esc(it.spec||'-')}</td><td class="r">${fmt(it.qty)}</td><td>${esc(it.uom)}</td><td>${fileLink(it.imageName||'Gambar',it.imageData)}</td><td>${stCell}</td></tr>`;
     }).join('')}</tbody></table></div></div>`;
+    if(d.srcType==='PR' && can('purchasing') && d.status==='OPEN'){
+      h += clarifyBox(d);
+    }
     h += `<div class="sec"><h4>Perbandingan quotation</h4>`;
     if(outIdx.length===0 && d.items.length>0){
       h += `<div class="hint" style="margin-bottom:8px">Semua item pada quotation ini sudah memiliki PO.</div>`;
@@ -796,8 +899,11 @@ function docModal(t,id){
           <div class="btns"><button class="btn ok" onclick="decide('approve')">Proses pembayaran & lanjut ke PO PDF</button><button class="btn bad" onclick="decide('reject')">Tolak (kembali ke Purchasing)</button></div></div>`;
       } else h += `<div class="warnbox">Sudah disetujui Manajemen. Menunggu Tim Finance memproses pembayaran sebelum PO PDF dapat diterbitkan & dibagikan ke supplier.</div>`;
     }
-    if(can('purchasing') && ['PENDING_MGMT','PENDING_DIRECTOR','PENDING_FINANCE'].includes(d.status)){
+    if(can('purchasing') && ['PENDING_MGMT','PENDING_DIRECTOR'].includes(d.status)){
       h += `<div class="btns"><button class="btn bad" onclick="pdfPO('${d.id}',true)">Unduh PO PDF (Urgent – belum disetujui/dibayar)</button></div><div class="hint" style="margin-top:6px">Khusus kondisi mendesak. PDF akan ditandai "DRAFT – BELUM DISETUJUI/DIBAYAR" dan tercatat di riwayat PO.</div>`;
+    }
+    if(can('purchasing') && d.status==='PENDING_FINANCE'){
+      h += `<div class="btns"><button class="btn pri" onclick="pdfPO('${d.id}')">Unduh PO PDF</button></div><div class="hint" style="margin-top:6px">Sudah disetujui Manajemen (tertanda tangani) — tinggal menunggu Finance memproses pembayaran sebelum dibagikan ke supplier.</div>`;
     }
     if(d.status==='APPROVED'||d.status==='SENT'||d.status==='RECEIVED'){
       h += `<div class="btns"><button class="btn pri" onclick="pdfPO('${d.id}')">Unduh PO PDF</button>${d.status==='APPROVED'&&can('purchasing')?`<button class="btn ok" onclick="markSent('${d.id}')">Tandai sudah dikirim ke supplier</button>`:''}</div><div class="hint" style="margin-top:6px">Pembayaran sudah diproses Finance — PDF ini yang dibagikan ke supplier untuk diproses pengiriman.</div>`;
@@ -835,7 +941,7 @@ function docModal(t,id){
 function formPR(){
   current=null;
   showModal(`<h3>Buat Purchase Request</h3><div class="hint">Untuk item yang belum ada di katalog.</div>
-  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" placeholder="Nama lengkap pemohon"></div><div><label class="f">Kode Unit *</label><input id="f-unit" placeholder="mis. DT-14, EX-02"></div><div><label class="f">Departemen *</label><select id="f-dept"><option value="">Pilih departemen</option>${DEPTS.map(x=>`<option>${x}</option>`).join('')}</select></div></div>
+  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" placeholder="Nama lengkap pemohon"></div><div><label class="f">Kode Unit *</label><input id="f-unit" placeholder="mis. DT-14, EX-02"></div><div><label class="f">Departemen *</label><select id="f-dept"><option value="">Pilih departemen</option>${DEPT_OPTIONS.map(x=>`<option>${x}</option>`).join('')}</select></div></div>
   <label class="f">Keperluan / alasan *</label><textarea id="f-note" placeholder="mis. penggantian komponen unit DT-14"></textarea>
   <div class="row"><div><label class="f">Prioritas</label><select id="f-prio"><option>Normal</option><option>Urgent</option></select></div><div><label class="f">Dibutuhkan tanggal</label><input type="date" id="f-need"></div></div>
   <label class="f">Item *</label><div id="rows"></div>
@@ -843,11 +949,25 @@ function formPR(){
   <div class="btns" style="margin-top:14px"><button class="btn pri" onclick="submitPR()">Ajukan PR</button><button class="btn" onclick="closeModal()">Batal</button></div>`);
   addPRRow();
 }
-function addPRRow(){
-  $('#rows').insertAdjacentHTML('beforeend',`<div class="row"><input class="i-name grow" placeholder="Nama item"><input class="i-spec grow" placeholder="Spesifikasi / merk / part no."><input class="i-qty" inputmode="decimal" placeholder="Qty" style="width:80px"><input class="i-uom" placeholder="Sat" style="width:70px"><button class="btn sm bad" onclick="this.parentElement.remove()">✕</button></div>`);
+function addPRRow(existing){
+  const existingImgHtml = (existing && existing.imageData) ? fileLink(existing.imageName||'Gambar',existing.imageData) : '<span class="hint">-</span>';
+  $('#rows').insertAdjacentHTML('beforeend',`<div class="row"><input class="i-name grow" placeholder="Nama item"><input class="i-spec grow" placeholder="Spesifikasi / merk / part no."><input class="i-qty" inputmode="decimal" placeholder="Qty" style="width:80px"><input class="i-uom" placeholder="Sat" style="width:70px"><span class="i-img-exist" style="min-width:60px">${existingImgHtml}</span><input type="file" class="i-img" accept="image/*" title="Upload gambar kebutuhan" style="width:110px"><button class="btn sm bad" onclick="this.parentElement.remove()">✕</button></div>`);
+  if(existing && existing.imageData){ const row=$('#rows').lastElementChild; row.dataset.existingImg=existing.imageData; row.dataset.existingImgName=existing.imageName||'Gambar'; }
 }
-function submitPR(){
-  const items=[...document.querySelectorAll('#rows .row')].map(r=>({name:r.querySelector('.i-name').value.trim(),spec:r.querySelector('.i-spec').value.trim(),qty:parseNum(r.querySelector('.i-qty').value),uom:r.querySelector('.i-uom').value.trim()||'pcs'})).filter(i=>i.name&&i.qty>0);
+async function collectPRItemsWithImages(){
+  const rows=[...document.querySelectorAll('#rows .row')];
+  const items = await Promise.all(rows.map(async r=>{
+    const name=r.querySelector('.i-name').value.trim(); const qty=parseNum(r.querySelector('.i-qty').value);
+    if(!name||!qty) return null;
+    const imgInput=r.querySelector('.i-img'); const file=imgInput&&imgInput.files&&imgInput.files[0];
+    let imageData=r.dataset.existingImg||null, imageName=r.dataset.existingImgName||null;
+    if(file){ const read=await readFileAsDataUrl(file); if(read){ imageData=read.data; imageName=read.name; } }
+    return {name,spec:r.querySelector('.i-spec').value.trim(),qty,uom:r.querySelector('.i-uom').value.trim()||'pcs',imageData,imageName};
+  }));
+  return items.filter(Boolean);
+}
+async function submitPR(){
+  const items = await collectPRItemsWithImages();
   const requester=$('#f-requester').value.trim(); const unitCode=$('#f-unit').value.trim(); const dept=$('#f-dept').value; const purpose=$('#f-note').value.trim();
   if(!requester) return toast('Isi nama pemohon');
   if(!unitCode) return toast('Isi kode unit');
@@ -863,7 +983,7 @@ function submitPR(){
 function formWR(){
   current=null;
   showModal(`<h3>Buat Warehouse Request</h3><div class="hint">Pilih item dari katalog. Bila stok tidak cukup, sisanya diteruskan ke Purchasing.</div>
-  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" placeholder="Nama lengkap pemohon"></div><div><label class="f">Kode Unit *</label><input id="f-unit" placeholder="mis. DT-14, EX-02"></div><div><label class="f">Departemen *</label><select id="f-dept"><option value="">Pilih departemen</option>${DEPTS.map(x=>`<option>${x}</option>`).join('')}</select></div></div>
+  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" placeholder="Nama lengkap pemohon"></div><div><label class="f">Kode Unit *</label><input id="f-unit" placeholder="mis. DT-14, EX-02"></div><div><label class="f">Departemen *</label><select id="f-dept"><option value="">Pilih departemen</option>${DEPT_OPTIONS.map(x=>`<option>${x}</option>`).join('')}</select></div></div>
   <label class="f">Keperluan / alasan *</label><textarea id="f-note" placeholder="mis. service PM 500 jam unit EX-02"></textarea>
   <label class="f">Dibutuhkan tanggal</label><input type="date" id="f-need">
   <label class="f">Item *</label><div id="rows"></div>
@@ -871,16 +991,25 @@ function formWR(){
   <div class="btns" style="margin-top:14px"><button class="btn pri" onclick="submitWR()">Ajukan WR</button><button class="btn" onclick="closeModal()">Batal</button></div>`);
   addWRRow();
 }
+function wrItemCode(val){ return (val||'').split('—')[0].trim(); }
+function wrCatalogByInput(val){ const code=wrItemCode(val); return S.catalog.find(x=>x.code===code) || S.catalog.find(x=>x.code+' — '+x.name===(val||'').trim()); }
+function wrCatalogDatalist(){
+  const old=$('#dl-catalog'); if(old) old.remove();
+  document.body.insertAdjacentHTML('beforeend',`<datalist id="dl-catalog">${S.catalog.map(c=>`<option value="${esc(c.code)} — ${esc(c.name)}">`).join('')}</datalist>`);
+  return 'dl-catalog';
+}
 function addWRRow(){
-  $('#rows').insertAdjacentHTML('beforeend',`<div class="row"><select class="i-item grow" onchange="wrHint(this.parentElement)">${S.catalog.map(c=>`<option value="${c.code}">${esc(c.code)} — ${esc(c.name)}</option>`).join('')}</select><input class="i-qty" inputmode="decimal" placeholder="Qty" style="width:80px" oninput="wrHint(this.parentElement)"><span class="hint i-hint" style="min-width:150px"></span><button class="btn sm bad" onclick="this.parentElement.remove()">✕</button></div>`);
+  const dl=wrCatalogDatalist();
+  $('#rows').insertAdjacentHTML('beforeend',`<div class="row"><input class="i-item grow" list="${dl}" placeholder="Cari kode / nama barang..." oninput="wrHint(this.parentElement)" onchange="wrHint(this.parentElement)"><input class="i-qty" inputmode="decimal" placeholder="Qty" style="width:80px" oninput="wrHint(this.parentElement)"><span class="hint i-hint" style="min-width:150px"></span><button class="btn sm bad" onclick="this.parentElement.remove()">✕</button></div>`);
   wrHint($('#rows').lastElementChild);
 }
 function wrHint(row){
-  const c=S.catalog.find(x=>x.code===row.querySelector('.i-item').value); const q=parseNum(row.querySelector('.i-qty').value);
+  const c=wrCatalogByInput(row.querySelector('.i-item').value); const q=parseNum(row.querySelector('.i-qty').value);
+  if(!c){ row.querySelector('.i-hint').innerHTML = `<span class="badge b-warn">Item tidak ditemukan</span>`; return; }
   row.querySelector('.i-hint').innerHTML = `Stok: ${fmt(c.stock)} ${esc(c.uom)}` + (q>c.stock?` <span class="badge b-warn">kurang ${fmt(q-c.stock)}</span>`:'');
 }
 function submitWR(){
-  const items=[...document.querySelectorAll('#rows .row')].map(r=>{const c=S.catalog.find(x=>x.code===r.querySelector('.i-item').value);return {code:c.code,name:c.name,spec:c.code,qty:parseNum(r.querySelector('.i-qty').value),uom:c.uom,issued:0,short:0};}).filter(i=>i.qty>0);
+  const items=[...document.querySelectorAll('#rows .row')].map(r=>{const c=wrCatalogByInput(r.querySelector('.i-item').value);if(!c) return null;return {code:c.code,name:c.name,spec:c.code,qty:parseNum(r.querySelector('.i-qty').value),uom:c.uom,issued:0,short:0};}).filter(i=>i&&i.qty>0);
   const requester=$('#f-requester').value.trim(); const unitCode=$('#f-unit').value.trim(); const dept=$('#f-dept').value; const purpose=$('#f-note').value.trim();
   if(!requester) return toast('Isi nama pemohon');
   if(!unitCode) return toast('Isi kode unit');
@@ -896,35 +1025,36 @@ function submitWR(){
 function revisePR(id){
   const d=find('pr',id); current=null;
   showModal(`<h3>Revisi ${esc(d.no)}</h3><div class="hint">PR ini ditolak. Perbaiki lalu ajukan ulang.</div>
-  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" value="${esc(d.requester||'')}"></div><div><label class="f">Kode Unit *</label><input id="f-unit" value="${esc(d.unitCode||'')}"></div><div><label class="f">Departemen *</label><select id="f-dept"><option value="">Pilih departemen</option>${DEPTS.map(x=>`<option ${d.dept===x?'selected':''}>${x}</option>`).join('')}</select></div></div>
+  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" value="${esc(d.requester||'')}"></div><div><label class="f">Kode Unit *</label><input id="f-unit" value="${esc(d.unitCode||'')}"></div><div><label class="f">Departemen *</label><select id="f-dept"><option value="">Pilih departemen</option>${DEPT_OPTIONS.map(x=>`<option ${d.dept===x?'selected':''}>${x}</option>`).join('')}</select></div></div>
   <label class="f">Keperluan / alasan *</label><textarea id="f-note">${esc(d.purpose)}</textarea>
   <div class="row"><div><label class="f">Prioritas</label><select id="f-prio"><option ${d.priority==='Normal'?'selected':''}>Normal</option><option ${d.priority==='Urgent'?'selected':''}>Urgent</option></select></div><div><label class="f">Dibutuhkan tanggal</label><input type="date" id="f-need" value="${esc(d.needBy||'')}"></div></div>
-  <label class="f">Item *</label><div id="rows"></div>
+  <label class="f">Item * <span class="hint">(lampirkan gambar kebutuhan bila membantu memperjelas spesifikasi)</span></label><div id="rows"></div>
   <button class="btn sm" onclick="addPRRow()">+ Tambah item</button>
   <div class="btns" style="margin-top:14px"><button class="btn pri" onclick="submitRevisePR('${id}')">Ajukan Ulang</button><button class="btn" onclick="openDoc('pr','${id}')">Batal</button></div>`);
   d.items.forEach(it=>{
-    addPRRow();
+    addPRRow(it);
     const row=$('#rows').lastElementChild;
     row.querySelector('.i-name').value=it.name; row.querySelector('.i-spec').value=it.spec||''; row.querySelector('.i-qty').value=it.qty; row.querySelector('.i-uom').value=it.uom;
   });
 }
-function submitRevisePR(id){
+async function submitRevisePR(id){
   const d=find('pr',id);
-  const items=[...document.querySelectorAll('#rows .row')].map(r=>({name:r.querySelector('.i-name').value.trim(),spec:r.querySelector('.i-spec').value.trim(),qty:parseNum(r.querySelector('.i-qty').value),uom:r.querySelector('.i-uom').value.trim()||'pcs'})).filter(i=>i.name&&i.qty>0);
+  const items = await collectPRItemsWithImages();
   const requester=$('#f-requester').value.trim(); const unitCode=$('#f-unit').value.trim(); const dept=$('#f-dept').value; const purpose=$('#f-note').value.trim();
   if(!requester) return toast('Isi nama pemohon');
   if(!unitCode) return toast('Isi kode unit');
   if(!dept) return toast('Pilih departemen');
   if(!purpose) return toast('Isi keperluan / alasan permintaan');
   if(!items.length) return toast('Isi minimal satu item dengan qty lebih dari 0');
-  d.requester=requester; d.unitCode=unitCode; d.dept=dept; d.purpose=purpose; d.priority=$('#f-prio').value; d.needBy=$('#f-need').value; d.items=items; d.status='PENDING_USER'; d.date=iso();
+  d.requester=requester; d.unitCode=unitCode; d.dept=dept; d.purpose=purpose; d.priority=$('#f-prio').value; d.needBy=$('#f-need').value; d.items=items; d.date=iso();
+  d.status='PENDING_USER';
   hist(d,'Diajukan ulang','Direvisi setelah ditolak, menunggu approval '+deptHeadLabel(dept));
   closeModal(); save(); setTab('pr'); toast(d.no+' diajukan ulang');
 }
 function reviseWR(id){
   const d=find('wr',id); current=null;
   showModal(`<h3>Revisi ${esc(d.no)}</h3><div class="hint">WR ini ditolak. Perbaiki lalu ajukan ulang.</div>
-  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" value="${esc(d.requester||'')}"></div><div><label class="f">Kode Unit *</label><input id="f-unit" value="${esc(d.unitCode||'')}"></div><div><label class="f">Departemen *</label><select id="f-dept"><option value="">Pilih departemen</option>${DEPTS.map(x=>`<option ${d.dept===x?'selected':''}>${x}</option>`).join('')}</select></div></div>
+  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" value="${esc(d.requester||'')}"></div><div><label class="f">Kode Unit *</label><input id="f-unit" value="${esc(d.unitCode||'')}"></div><div><label class="f">Departemen *</label><select id="f-dept"><option value="">Pilih departemen</option>${DEPT_OPTIONS.map(x=>`<option ${d.dept===x?'selected':''}>${x}</option>`).join('')}</select></div></div>
   <label class="f">Keperluan / alasan *</label><textarea id="f-note">${esc(d.purpose)}</textarea>
   <label class="f">Dibutuhkan tanggal</label><input type="date" id="f-need" value="${esc(d.needBy||'')}">
   <label class="f">Item *</label><div id="rows"></div>
@@ -933,12 +1063,12 @@ function reviseWR(id){
   d.items.forEach(it=>{
     addWRRow();
     const row=$('#rows').lastElementChild;
-    row.querySelector('.i-item').value=it.code; row.querySelector('.i-qty').value=it.qty; wrHint(row);
+    row.querySelector('.i-item').value=it.code+' — '+it.name; row.querySelector('.i-qty').value=it.qty; wrHint(row);
   });
 }
 function submitReviseWR(id){
   const d=find('wr',id);
-  const items=[...document.querySelectorAll('#rows .row')].map(r=>{const c=S.catalog.find(x=>x.code===r.querySelector('.i-item').value);return {code:c.code,name:c.name,spec:c.code,qty:parseNum(r.querySelector('.i-qty').value),uom:c.uom,issued:0,short:0};}).filter(i=>i.qty>0);
+  const items=[...document.querySelectorAll('#rows .row')].map(r=>{const c=wrCatalogByInput(r.querySelector('.i-item').value);if(!c) return null;return {code:c.code,name:c.name,spec:c.code,qty:parseNum(r.querySelector('.i-qty').value),uom:c.uom,issued:0,short:0};}).filter(i=>i&&i.qty>0);
   const requester=$('#f-requester').value.trim(); const unitCode=$('#f-unit').value.trim(); const dept=$('#f-dept').value; const purpose=$('#f-note').value.trim();
   if(!requester) return toast('Isi nama pemohon');
   if(!unitCode) return toast('Isi kode unit');
@@ -1418,6 +1548,12 @@ function exportPRExcel(){
   toast('Excel PR berhasil diunduh');
 }
 
+function poUnitCode(d){
+  const s = S.src.find(s=>s.id===d.srcId);
+  if(!s) return '-';
+  const ref = (s.srcType==='PR'?S.prs:S.wrs).find(x=>x.id===s.srcId);
+  return (ref && ref.unitCode) || '-';
+}
 function exportPOExcel(){
   if(!xlsxReady()) return toast('Library Excel belum termuat (perlu koneksi internet)');
   const pos = S.pos;
@@ -1426,7 +1562,7 @@ function exportPOExcel(){
     const rc = d.receiving;
     return {
       'No PO': d.no, 'Tanggal': dd(d.date), 'Supplier': d.supplier||'-', 'Referensi': (S.src.find(s=>s.id===d.srcId)||{}).refNo || '-',
-      'Dept Req': d.deptReq||'-', 'Lead Time (hari)': d.leadDays||'-',
+      'Kode Unit': poUnitCode(d), 'Dept Req': d.deptReq||'-', 'Lead Time (hari)': d.leadDays||'-',
       'Subtotal': d.subtotal||0, 'Diskon': d.discount||0, 'PPN': d.ppn||0, 'Ongkos Kirim': d.shipping||0, 'Total': d.total||0,
       'Status': (PO_ST[d.status]||[d.status])[0], 'Approver Saat Ini/Terakhir': (ROLES[poCurrentApproverKey(d)]||{}).name||'-',
       'Metode Pembayaran': d.payment?d.payment.method:'-', 'No Ref Pembayaran': d.payment?(d.payment.ref||'-'):'-', 'Tanggal Bayar': d.payment?dt(d.payment.date):'-',
@@ -1482,10 +1618,10 @@ function exportPOPdf(){
   const startY = reportHeader(d,'Laporan Historis Purchase Order');
   const grandTotal = pos.reduce((s,x)=>s+(x.total||0),0);
   d.autoTable({startY,
-    head:[['No PO','Tanggal','Supplier','Dept Req','Subtotal','Diskon','PPN','Ongkir','Total','Status','Pembayaran']],
-    body:pos.map(x=>[x.no,dd(x.date),x.supplier||'-',x.deptReq||'-',fmt(x.subtotal,2),fmt(x.discount,2),fmt(x.ppn,2),fmt(x.shipping,2),fmt(x.total,2),(PO_ST[x.status]||[x.status])[0],x.payment?x.payment.method:'-']),
+    head:[['No PO','Tanggal','Supplier','Kode Unit','Dept Req','Subtotal','Diskon','PPN','Ongkir','Total','Status','Pembayaran']],
+    body:pos.map(x=>[x.no,dd(x.date),x.supplier||'-',poUnitCode(x),x.deptReq||'-',fmt(x.subtotal,2),fmt(x.discount,2),fmt(x.ppn,2),fmt(x.shipping,2),fmt(x.total,2),(PO_ST[x.status]||[x.status])[0],x.payment?x.payment.method:'-']),
     styles:{fontSize:7.5,cellPadding:2},headStyles:{fillColor:[30,64,120]},
-    columnStyles:{4:{halign:'right'},5:{halign:'right'},6:{halign:'right'},7:{halign:'right'},8:{halign:'right'}}
+    columnStyles:{5:{halign:'right'},6:{halign:'right'},7:{halign:'right'},8:{halign:'right'},9:{halign:'right'}}
   });
   let y=d.lastAutoTable.finalY+8;
   d.setFont('helvetica','bold'); d.setFontSize(9.5); d.text('Total data: '+pos.length+' PO   |   Grand Total: '+rp(grandTotal),14,y);
