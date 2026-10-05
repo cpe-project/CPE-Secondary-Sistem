@@ -213,9 +213,9 @@ label.f{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;font-w
     <div class="tb-profile">
       <button class="tb-profile-btn" onclick="toggleTbMenu()"><div class="av" id="tbAv">?</div><b id="tbName"></b><span style="font-size:11px;color:var(--mut)">▾</span></button>
       <div class="tb-menu" id="tbMenu">
-        <a onclick="toggleTbMenu(false);manageSignatures()">🛡️ Tanda Tangan</a>
-        <a onclick="toggleTbMenu(false);changePassword()">🔑 Ganti Password</a>
-        <a class="bad" onclick="toggleTbMenu(false);doLogout()">⎋ Keluar</a>
+        <a id="tb-menu-sig" onclick="toggleTbMenu(false);manageSignatures()">🛡️ Tanda Tangan</a>
+        <a id="tb-menu-pass" onclick="toggleTbMenu(false);changePassword()">🔑 Ganti Password</a>
+        <a class="bad" id="tb-menu-logout" onclick="toggleTbMenu(false);doLogout()">⎋ Keluar</a>
       </div>
     </div>
   </div>
@@ -231,6 +231,8 @@ label.f{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;font-w
     <label class="f">Password</label><input id="auth-pass" type="password" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
     <div id="authErr" class="warnbox" style="display:none"></div>
     <div class="btns" style="margin-top:14px"><button class="btn pri" style="width:100%" onclick="doLogin()">Masuk</button></div>
+    <button class="btn" style="width:100%;margin-top:8px" onclick="guestView()">👁 Lihat Saja (Tanpa Login)</button>
+    <div class="hint" style="margin-top:8px;text-align:center">Mode lihat saja — hanya bisa melihat data, tidak bisa membuat, menyetujui, atau mengubah apa pun.</div>
   </div>
 </div>
 
@@ -243,6 +245,7 @@ label.f{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;font-w
 const SUPABASE_URL = 'https://igyhcaoggwjlvwxbksyf.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_99d9zPYOTz3cHWbFpUKDtw_Z_s7zGtA';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+window.__libsLoaded = true; // marker for the watchdog script below — reached only if the Supabase CDN script loaded
 
 /* ============ Konfigurasi ============ */
 const ROLES = {
@@ -258,7 +261,8 @@ const ROLES = {
   mgmt2:         {label:'Operational Director (PO > Rp5 jt)',       name:'Faisal H Simangunsong', title:'Operational Director'},
   finance:       {label:'Finance',                                  name:'Eka Putri Shinta'},
   warehouse:     {label:'Warehouse',                                name:'Joko'},
-  admin:         {label:'Inventory',                                name:'Admin'}
+  admin:         {label:'Inventory',                                name:'Admin'},
+  guest:         {label:'Lihat Saja',                                name:'Tamu (Lihat Saja)'}
 };
 const LIMIT = 5000000;
 const DEPTS = ['PLANT-SM','PRODUKSI','HSE','ENGINEERING','HRGA'];
@@ -539,6 +543,10 @@ function render(){
   const rname = actorName();
   if($('#tbAv')) $('#tbAv').textContent = rname.charAt(0).toUpperCase();
   if($('#tbName')) $('#tbName').textContent = rname;
+  const isGuest = role==='guest';
+  if($('#tb-menu-sig')) $('#tb-menu-sig').style.display = isGuest?'none':'';
+  if($('#tb-menu-pass')) $('#tb-menu-pass').style.display = isGuest?'none':'';
+  if($('#tb-menu-logout')) $('#tb-menu-logout').textContent = isGuest?'⎋ Keluar dari Mode Lihat':'⎋ Keluar';
   const pendingCount = ['pr','wr','src','po'].reduce((s,t)=>s+countAct(t),0);
   if($('#tb-bell-dot')) $('#tb-bell-dot').style.display = pendingCount ? 'block' : 'none';
   $('#view').innerHTML = tab==='dashboard' ? vDash() : tab==='cat' ? vCat() : tab==='info' ? vInfo() : vList(tab);
@@ -1683,12 +1691,28 @@ async function deleteDoc(t,id){
   closeModal(); render(); toast('Dokumen dan dokumen/foto turunannya dihapus');
 }
 async function doLogout(){
-  if(!confirm('Keluar dari akun ini?')) return;
+  const wasGuest = role==='guest';
+  if(!confirm(wasGuest?'Keluar dari mode lihat saja?':'Keluar dari akun ini?')) return;
   if(realtimeChannel){ sb.removeChannel(realtimeChannel); realtimeChannel=null; }
-  await sb.auth.signOut();
+  if(!wasGuest) await sb.auth.signOut();
   session=null; myProfile=null; role=null;
   closeModal();
   showAuthScreen();
+}
+async function guestView(){
+  showAuthScreen();
+  try{
+    await loadFromSupabase();
+  }catch(e){
+    console.error(e);
+    return showAuthScreen('Gagal memuat data untuk mode lihat saja. Cek koneksi internet lalu coba lagi.');
+  }
+  role = 'guest'; session = null; myProfile = null;
+  hideAuthScreen();
+  subscribeRealtime();
+  tab = 'dashboard'; current = null;
+  render();
+  toast('Mode lihat saja — tanpa login, tidak bisa membuat/menyetujui dokumen');
 }
 async function changePassword(){
   const np = prompt('Password baru (minimal 6 karakter):');
@@ -1737,6 +1761,7 @@ function subscribeRealtime(){
 async function boot(){
   const {data:{session:sess}} = await sb.auth.getSession();
   if(sess){ await afterLogin(sess); } else { showAuthScreen(); }
+  window.__appBooted = true; // marker for the watchdog script below — reached once a stable screen (login or app) is shown
   sb.auth.onAuthStateChange((event)=>{
     if(event==='SIGNED_OUT'){ session=null; myProfile=null; role=null; showAuthScreen(); }
   });
@@ -1751,7 +1776,31 @@ function addSigToPdf(doc,dataUrl,centerX,y,maxW,maxH){
   }catch(e){ /* format gambar tidak didukung jsPDF, lewati diam-diam */ }
 }
 
-boot();
+boot().catch(e=>{ console.error('Gagal boot aplikasi:', e); });
+
+</script>
+<script>
+// Watchdog independen dari script utama di atas: kalau script utama gagal total (mis. library dari
+// CDN seperti Supabase/jsPDF gagal dimuat karena koneksi/jaringan diblokir — termasuk oleh panel
+// preview yang jaringannya terbatas), halaman akan diam/muter-muter loading tanpa pesan apa pun.
+// Watchdog ini menampilkan pesan error yang jelas kalau aplikasi belum siap dalam beberapa detik.
+(function(){
+  setTimeout(function(){
+    if (window.__appBooted) return; // aplikasi sudah siap (layar login atau halaman utama tampil), tidak perlu apa-apa
+    var msg = window.__libsLoaded
+      ? 'Aplikasi berhasil memuat library, tapi gagal terhubung ke server (Supabase). Cek koneksi internet Anda, lalu muat ulang halaman.'
+      : 'Gagal memuat library yang dibutuhkan (Supabase/jsPDF/Excel) dari internet. Ini sering terjadi bila file dibuka di panel preview yang jaringannya terbatas. Coba unduh file ini lalu buka langsung di browser (Chrome/Edge/Safari), atau pastikan ada koneksi internet.';
+    var box = document.createElement('div');
+    box.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:99999;display:flex;align-items:center;justify-content:center;padding:24px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif';
+    box.innerHTML = '<div style="max-width:420px;text-align:center">'
+      + '<div style="font-size:40px;margin-bottom:12px">⚠️</div>'
+      + '<div style="font-weight:700;font-size:16px;margin-bottom:8px;color:#1e2330">Aplikasi tidak bisa dimuat</div>'
+      + '<div style="color:#5b6472;font-size:14px;line-height:1.5;margin-bottom:18px">' + msg + '</div>'
+      + '<button onclick="location.reload()" style="background:#2563eb;color:#fff;border:none;border-radius:10px;padding:10px 20px;font-weight:600;font-size:14px;cursor:pointer">Muat Ulang Halaman</button>'
+      + '</div>';
+    document.body.appendChild(box);
+  }, 8000);
+})();
 </script>
 </body>
 </html>
