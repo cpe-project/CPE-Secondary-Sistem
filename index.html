@@ -780,6 +780,9 @@ function docModal(t,id){
     if(wr && d.status!=='PENDING_USER' && d.status!=='REJECTED'){
       h += `<div class="btns"><button class="btn pri" onclick="pdfWR('${d.id}')">Cetak/Unduh Form WR</button></div>`;
     }
+    if(!wr){
+      h += `<div class="btns"><button class="btn pri" onclick="pdfPR('${d.id}')">Cetak/Unduh PR PDF</button></div>`;
+    }
     if(d.status==='REJECTED'){
       const lastRej = [...d.history].reverse().find(hh=>/[Dd]itolak/.test(hh.action));
       h += `<div class="warnbox">${wr?'WR':'PR'} ini ditolak${lastRej&&lastRej.note?': '+esc(lastRej.note):''}. ${(can('user')||can('planner'))?'Anda dapat merevisi dan mengajukan ulang.':'Menunggu User/Planner merevisi dan mengajukan ulang.'}</div>`;
@@ -1170,9 +1173,9 @@ function formQuote(srcId){
   <label class="f">Alamat Supplier</label><textarea id="q-addr" placeholder="Alamat lengkap supplier"></textarea>
   <div class="row"><div><label class="f">Lead time (hari)</label><input id="q-lead" inputmode="numeric" style="width:120px"></div><div><label class="f">No. Fax</label><input id="q-fax" style="width:150px"></div><div><label class="f">Attn (PIC)</label><input id="q-attn" style="width:180px"></div><div><label class="f">No. Quotation</label><input id="q-qno" style="width:150px"></div></div>
   <div class="hint" style="margin-top:-6px;margin-bottom:8px">Ketik/pilih nama supplier yang sudah pernah dipakai untuk mengisi otomatis alamat, fax &amp; attn.</div>
-  <label class="f">Harga satuan per item (Rp)</label>
-  <div class="hint" style="margin-top:-4px;margin-bottom:6px">Kosongkan item yang tidak ditawarkan supplier ini — PO nanti hanya dibuat untuk item yang ada harganya, sisanya tetap outstanding menunggu quotation lain.</div>
-  <div class="tw"><table><tbody>${outIdx.map(i=>s.items[i]).map((it,k)=>`<tr><td>${esc(it.name)}<br><span class="hint">${fmt(it.qty)} ${esc(it.uom)}</span></td><td><input class="q-price" data-i="${outIdx[k]}" inputmode="decimal" placeholder="Tidak ditawarkan" style="width:150px" oninput="fmtInput(this)"></td></tr>`).join('')}</tbody></table></div>
+  <label class="f">Harga satuan &amp; No. Part per item (Rp)</label>
+  <div class="hint" style="margin-top:-4px;margin-bottom:6px">Kosongkan item yang tidak ditawarkan supplier ini — PO nanti hanya dibuat untuk item yang ada harganya, sisanya tetap outstanding menunggu quotation lain. Isi No. Part untuk mencatat part number/model persis yang akan diorder dari supplier ini (tampil di PO).</div>
+  <div class="tw"><table><thead><tr><th>Item</th><th>Harga Satuan</th><th>No. Part yang Diorder</th></tr></thead><tbody>${outIdx.map(i=>s.items[i]).map((it,k)=>`<tr><td>${esc(it.name)}<br><span class="hint">${fmt(it.qty)} ${esc(it.uom)}</span></td><td><input class="q-price" data-i="${outIdx[k]}" inputmode="decimal" placeholder="Tidak ditawarkan" style="width:150px" oninput="fmtInput(this)"></td><td><input class="q-partnum" data-i="${outIdx[k]}" placeholder="mis. SKF-6205-2RS" style="width:170px" value="${esc(it.spec||'')}"></td></tr>`).join('')}</tbody></table></div>
   <label class="f">Catatan</label><textarea id="q-note" placeholder="mis. garansi, syarat pembayaran, ketersediaan"></textarea>
   <label class="f">Upload Dokumen Quotation (PDF/gambar)</label><input type="file" id="q-file" accept="image/*,.pdf"><div class="hint">Opsional — surat penawaran dari supplier, memudahkan approver mengevaluasi.</div>
   <div class="btns" style="margin-top:12px"><button class="btn pri" onclick="submitQuote('${s.id}')">Simpan quotation</button><button class="btn" onclick="openDoc('src','${s.id}')">Batal</button></div>`);
@@ -1180,10 +1183,12 @@ function formQuote(srcId){
 function submitQuote(srcId){
   const s=find('src',srcId); const supplier=$('#q-sup').value.trim();
   const prices=s.items.map(()=>null);
+  const partNumbers=s.items.map(()=>'');
   [...document.querySelectorAll('.q-price')].forEach(inp=>{ const i=Number(inp.dataset.i); const v=parseNum(inp.value); prices[i] = v>0 ? v : null; });
+  [...document.querySelectorAll('.q-partnum')].forEach(inp=>{ const i=Number(inp.dataset.i); partNumbers[i] = inp.value.trim(); });
   if(!supplier) return toast('Isi nama supplier');
   if(prices.every(p=>!p)) return toast('Isi harga satuan untuk minimal satu item');
-  const quote={id:uid(),supplier,address:$('#q-addr').value.trim(),fax:$('#q-fax').value.trim(),attn:$('#q-attn').value.trim(),quoteNo:$('#q-qno').value.trim(),leadDays:parseNum($('#q-lead').value),note:$('#q-note').value.trim(),prices};
+  const quote={id:uid(),supplier,address:$('#q-addr').value.trim(),fax:$('#q-fax').value.trim(),attn:$('#q-attn').value.trim(),quoteNo:$('#q-qno').value.trim(),leadDays:parseNum($('#q-lead').value),note:$('#q-note').value.trim(),prices,partNumbers};
   const finalizeQuote = (file) => {
     if(file){ quote.fileName=file.name; quote.fileData=file.data; }
     s.quotes.push(quote);
@@ -1232,7 +1237,7 @@ function createPO(srcId){
   const discount=parseNum($('#po-disc').value), shipping=parseNum($('#po-ship').value);
   const ppnOn=$('#po-ppn-on')?.checked!==false; const ppnRate=parseNum($('#po-ppn-rate')?.value ?? '11');
   const ppn=ppnOn?parseNum($('#po-ppn-amt')?.value):0;
-  const items=targetIdx.map(i=>({name:s.items[i].name,spec:s.items[i].spec,qty:s.items[i].qty,uom:s.items[i].uom,price:q.prices[i]}));
+  const items=targetIdx.map(i=>({name:s.items[i].name,spec:(q.partNumbers&&q.partNumbers[i])||s.items[i].spec,qty:s.items[i].qty,uom:s.items[i].uom,price:q.prices[i]}));
   const subtotal=items.reduce((a,it)=>a+it.qty*it.price,0);
   const dpp=Math.max(0,subtotal-discount);
   const total=dpp+ppn+shipping;
@@ -1518,6 +1523,36 @@ function pdfWR(id){
   d.line(15,y+20,55,y+20); d.line(150,y+20,190,y+20);
   d.setFontSize(8); d.text('Nama & Tanggal',30,y+24,{align:'center'}); d.text('Nama & Tanggal',165,y+24,{align:'center'});
   d.save(wr.no.replace(/\//g,'-')+'.pdf');
+}
+function pdfPR(id){
+  const pr=find('pr',id);
+  if(!(window.jspdf&&window.jspdf.jsPDF)) return toast('Library PDF belum termuat (perlu koneksi internet)');
+  const {jsPDF}=window.jspdf; const d=new jsPDF({unit:'mm',format:'a4'});
+  const logoW=42, logoH=logoW/COMPANY_LOGO_RATIO;
+  d.addImage(COMPANY_LOGO,'PNG',14,8,logoW,logoH);
+  d.setFont('helvetica','normal'); d.setFontSize(8);
+  const addrY = 8+logoH+3;
+  const addrLines = d.splitTextToSize(COMPANY_ADDRESS,110);
+  d.text(addrLines,14,addrY);
+  d.setFont('helvetica','bold'); d.setFontSize(16); d.text('PURCHASE REQUEST',196,17,{align:'right'});
+  const lineY = Math.max(25, addrY+addrLines.length*3.6+2);
+  d.setDrawColor(30,64,120); d.setLineWidth(0.6); d.line(14,lineY,196,lineY);
+  const infoStartY = lineY+7;
+  d.setFontSize(9.5);
+  const info=[['No PR',pr.no],['Tanggal',dd(pr.date)],['Kode Unit',pr.unitCode||'-'],['Departemen',pr.dept],['Pemohon',pr.requester],['Prioritas',pr.priority||'-'],['Dibutuhkan',pr.needBy?dd(pr.needBy):'-'],['Keperluan',pr.purpose||'-'],['Status',(PR_ST[pr.status]||[pr.status])[0]]];
+  let infoY=infoStartY;
+  info.forEach(([k,v])=>{ d.setFont('helvetica','bold'); d.text(k,14,infoY); d.setFont('helvetica','normal'); const lines=d.splitTextToSize(': '+v,140); d.text(lines,40,infoY); infoY += Math.max(5.5,lines.length*4.2); });
+  const tableStartY = infoY+4;
+  d.autoTable({startY:tableStartY,head:[['No','Nama Item','Spesifikasi','Qty','Sat']],
+    body:pr.items.map((it,i)=>[i+1,it.name,it.spec||'-',fmt(it.qty),it.uom]),
+    styles:{fontSize:9,cellPadding:2},headStyles:{fillColor:[30,64,120]}});
+  let y = d.lastAutoTable.finalY+20;
+  if(y>230){ d.addPage(); y=30; }
+  d.setFont('helvetica','normal'); d.setFontSize(9.5);
+  d.text('Pemohon,',30,y,{align:'center'}); d.text('Mengetahui ('+deptHeadLabel(pr.dept)+'),',165,y,{align:'center'});
+  d.line(15,y+20,55,y+20); d.line(150,y+20,190,y+20);
+  d.setFontSize(8); d.text('Nama & Tanggal',30,y+24,{align:'center'}); d.text('Nama & Tanggal',165,y+24,{align:'center'});
+  d.save(pr.no.replace(/\//g,'-')+'.pdf');
 }
 
 /* ============ Export Historis: PR & PO (Excel & PDF) ============ */
