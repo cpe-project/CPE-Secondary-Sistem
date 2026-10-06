@@ -348,7 +348,7 @@ const DEFAULT_CATALOG = [
     ['HSE-HYD-007','Hose Hydraulic 1/2" x 1 m','pcs',3],['OIL-15W-008','Oli Mesin 15W-40 (drum 208 L)','drum',2],
     ['GLV-WLD-009','Sarung Tangan Las','pasang',25],['SEAL-KIT-010','Seal Kit Cylinder Boom','set',0],
     ['LMP-LED-011','Lampu Work Light LED 24V','pcs',5],['BLT-M16-012','Baut M16 x 60 Grade 8.8','pcs',200]
-  ].map(([code,name,uom,stock])=>({code,name,uom,stock}));
+  ].map(([code,name,uom,stock])=>({code,name,uom,stock,partNumber:'',brand:''}));
 function emptyState(){ return {catalog:DEFAULT_CATALOG, suppliers:[], seq:{PR:0,WR:0,SRC:0,PO:0}, prs:[], wrs:[], src:[], pos:[], signatures:{}}; }
 
 /* ---- mapping antara bentuk data di JS (camelCase) dan kolom Supabase (snake_case) ---- */
@@ -369,7 +369,7 @@ async function loadFromSupabase(){
     sb.from('pos').select('*').order('date',{ascending:false}),
     sb.from('signatures').select('*'),
     sb.from('doc_seq').select('*'),
-    sb.from('catalog').select('code,name,uom,stock'),
+    sb.from('catalog').select('code,name,uom,stock,part_number,brand'),
     sb.from('suppliers').select('name,address,fax,attn')
   ]);
   const S2 = emptyState();
@@ -379,7 +379,7 @@ async function loadFromSupabase(){
   if(posR.data) S2.pos = posR.data.map(toPO);
   if(sigR.data) sigR.data.forEach(r=>{ S2.signatures[r.role]=r.data_url; });
   if(seqR.data) seqR.data.forEach(r=>{ S2.seq[r.doc_type]=r.value; });
-  if(catR.data && catR.data.length) S2.catalog = catR.data.map(r=>({code:r.code,name:r.name,uom:r.uom||'pcs',stock:Number(r.stock)||0}));
+  if(catR.data && catR.data.length) S2.catalog = catR.data.map(r=>({code:r.code,name:r.name,uom:r.uom||'pcs',stock:Number(r.stock)||0,partNumber:r.part_number||'',brand:r.brand||''}));
   if(supR && supR.data) S2.suppliers = supR.data.map(r=>({name:r.name,address:r.address||'',fax:r.fax||'',attn:r.attn||''}));
   if(!S2.signatures.mgmt1) S2.signatures.mgmt1 = DEFAULT_SIGNATURES.mgmt1;
   if(!S2.signatures.mgmt2) S2.signatures.mgmt2 = DEFAULT_SIGNATURES.mgmt2;
@@ -415,7 +415,7 @@ async function save(){
     await run([
       sigRows.length ? sb.from('signatures').upsert(sigRows) : null,
       seqRows.length ? sb.from('doc_seq').upsert(seqRows) : null,
-      (S.catalog && S.catalog.length) ? sb.from('catalog').upsert(S.catalog.map(c=>({code:c.code,name:c.name,uom:c.uom,stock:c.stock}))) : null,
+      (S.catalog && S.catalog.length) ? sb.from('catalog').upsert(S.catalog.map(c=>({code:c.code,name:c.name,uom:c.uom,stock:c.stock,part_number:c.partNumber||null,brand:c.brand||null}))) : null,
       (S.suppliers && S.suppliers.length) ? sb.from('suppliers').upsert(S.suppliers.map(x=>({name:x.name,address:x.address||null,fax:x.fax||null,attn:x.attn||null}))) : null,
     ].filter(Boolean));
     if(firstErr){ console.error(firstErr); toast('Gagal menyimpan ke server: '+firstErr.message); }
@@ -632,11 +632,11 @@ function vList(t){
 }
 
 function vCat(){
-  return `<div class="top"><h2>Katalog & Stok</h2><p>Item terkatalog dan stok gudang saat ini. ${can('warehouse')?'Sebagai Warehouse Anda dapat menambah item baru, mengubah nama/satuan/stok item.':''}</p></div>
+  return `<div class="top"><h2>Katalog & Stok</h2><p>Item terkatalog dan stok gudang saat ini. ${can('warehouse')?'Sebagai Warehouse/Inventory Anda dapat menambah item baru, mengubah data item, serta export/import Excel.':''}</p></div>
   <div class="card">
-    ${can('warehouse')?`<div class="btns" style="margin-bottom:10px"><button class="btn pri" onclick="formCatalogItem()">+ Tambah Item Katalog</button></div>`:''}
-    <div class="tw"><table><thead><tr><th>Kode</th><th>Nama item</th><th>Sat</th><th class="r">Stok</th>${can('warehouse')?'<th></th>':''}</tr></thead><tbody>
-    ${S.catalog.map(c=>`<tr><td>${esc(c.code)}</td><td>${esc(c.name)}</td><td>${esc(c.uom)}</td><td class="r">${c.stock>0?fmt(c.stock):'<span class="badge b-bad">Kosong</span>'}</td>${can('warehouse')?`<td class="r"><button class="btn sm" onclick="formCatalogItem('${c.code}')">Ubah</button></td>`:''}</tr>`).join('')}
+    ${can('warehouse')?`<div class="btns" style="margin-bottom:10px"><button class="btn pri" onclick="formCatalogItem()">+ Tambah Item Katalog</button><button class="btn" onclick="exportCatalogExcel()">📊 Export Excel</button><button class="btn" onclick="document.getElementById('cat-import-file').click()">📥 Import/Update Excel</button><input type="file" id="cat-import-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importCatalogExcel(this)"></div>`:''}
+    <div class="tw"><table><thead><tr><th>Kode</th><th>Nama item</th><th>No. Part</th><th>Brand</th><th>Sat</th><th class="r">Stok</th>${can('warehouse')?'<th></th>':''}</tr></thead><tbody>
+    ${S.catalog.map(c=>`<tr><td>${esc(c.code)}</td><td>${esc(c.name)}</td><td>${esc(c.partNumber||'-')}</td><td>${esc(c.brand||'-')}</td><td>${esc(c.uom)}</td><td class="r">${c.stock>0?fmt(c.stock):'<span class="badge b-bad">Kosong</span>'}</td>${can('warehouse')?`<td class="r"><button class="btn sm" onclick="formCatalogItem('${c.code}')">Ubah</button></td>`:''}</tr>`).join('')}
     </tbody></table></div>
   </div>`;
 }
@@ -646,6 +646,8 @@ function formCatalogItem(code){
   showModal(`<h3>${c?'Ubah Item Katalog':'Tambah Item Katalog'}</h3>
     <label class="f">Kode Item *</label><input id="cat-code" value="${c?esc(c.code):''}" ${c?'disabled':''} placeholder="mis. FLT-001">
     <label class="f">Nama Item *</label><input id="cat-name" value="${c?esc(c.name):''}" placeholder="mis. Filter Oli">
+    <label class="f">No. Part</label><input id="cat-partnum" value="${c?esc(c.partNumber||''):''}" placeholder="mis. SKF-6205-2RS">
+    <label class="f">Brand</label><input id="cat-brand" value="${c?esc(c.brand||''):''}" placeholder="mis. SKF">
     <label class="f">Satuan *</label><input id="cat-uom" value="${c?esc(c.uom):''}" placeholder="mis. pcs, liter, unit">
     <label class="f">Stok</label><input id="cat-stock" inputmode="decimal" value="${c?fmt(c.stock):'0'}" oninput="fmtInput(this)">
     <div class="btns" style="margin-top:14px"><button class="btn pri" onclick="saveCatalogItem(${c?`'${esc(c.code)}'`:'null'})">Simpan</button></div>`);
@@ -654,13 +656,71 @@ function saveCatalogItem(origCode){
   if(!can('warehouse')) return;
   const code = ($('#cat-code').value||'').trim().toUpperCase();
   const name = ($('#cat-name').value||'').trim();
+  const partNumber = ($('#cat-partnum').value||'').trim();
+  const brand = ($('#cat-brand').value||'').trim();
   const uom = ($('#cat-uom').value||'').trim();
   const stock = Math.max(0, parseNum($('#cat-stock').value));
   if(!code||!name||!uom) return toast('Kode, nama, dan satuan wajib diisi');
   if(!origCode && S.catalog.some(x=>x.code===code)) return toast('Kode item sudah ada');
-  if(origCode){ const c=S.catalog.find(x=>x.code===origCode); c.name=name; c.uom=uom; c.stock=stock; }
-  else S.catalog.push({code,name,uom,stock});
+  if(origCode){ const c=S.catalog.find(x=>x.code===origCode); c.name=name; c.partNumber=partNumber; c.brand=brand; c.uom=uom; c.stock=stock; }
+  else S.catalog.push({code,name,partNumber,brand,uom,stock});
   save(); closeModal(); render(); toast('Item katalog disimpan');
+}
+function exportCatalogExcel(){
+  if(!can('warehouse')) return;
+  if(!xlsxReady()) return toast('Library Excel belum termuat (perlu koneksi internet)');
+  if(!S.catalog.length) return toast('Belum ada data katalog');
+  const rows = S.catalog.map(c=>({'Kode':c.code,'Nama Item':c.name,'No. Part':c.partNumber||'','Brand':c.brand||'','Satuan':c.uom,'Stok':c.stock}));
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows); ws['!cols']=autoWidth(rows);
+  XLSX.utils.book_append_sheet(wb,ws,'Katalog');
+  XLSX.writeFile(wb,'Katalog-Stok-'+dd2(iso())+'.xlsx');
+}
+function importCatalogExcel(input){
+  if(!can('warehouse')) return;
+  const file = input.files && input.files[0];
+  if(!file) return;
+  if(!xlsxReady()){ input.value=''; return toast('Library Excel belum termuat (perlu koneksi internet)'); }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try{
+      const wb = XLSX.read(e.target.result,{type:'array'});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws,{defval:''});
+      if(!rows.length){ toast('File Excel kosong atau format tidak dikenali'); return; }
+      const pick = (r,...keys) => { for(const k of keys){ if(r[k]!==undefined && r[k]!=='') return String(r[k]).trim(); } return ''; };
+      let added=0, updated=0, skipped=0;
+      rows.forEach(r=>{
+        const code = pick(r,'Kode','kode','Code','code').toUpperCase();
+        if(!code){ skipped++; return; }
+        const name = pick(r,'Nama Item','nama item','Nama','name');
+        const partNumber = pick(r,'No. Part','No Part','Part Number','partNumber','part_number');
+        const brand = pick(r,'Brand','brand','Merk','merk');
+        const uom = pick(r,'Satuan','satuan','Sat','uom') || 'pcs';
+        const stockRaw = pick(r,'Stok','stok','Stock','stock');
+        const stock = stockRaw!=='' ? Math.max(0, parseNum(stockRaw)) : 0;
+        const existing = S.catalog.find(x=>x.code===code);
+        if(existing){
+          if(name) existing.name = name;
+          existing.partNumber = partNumber;
+          existing.brand = brand;
+          if(uom) existing.uom = uom;
+          if(stockRaw!=='') existing.stock = stock;
+          updated++;
+        } else {
+          if(!name){ skipped++; return; }
+          S.catalog.push({code,name,partNumber,brand,uom,stock});
+          added++;
+        }
+      });
+      save(); render(); toast(`Import selesai: ${added} item baru, ${updated} diperbarui${skipped?`, ${skipped} dilewati`:''}`);
+    } catch(err){
+      toast('Gagal membaca file Excel: '+err.message);
+    } finally {
+      input.value = '';
+    }
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 /* ============ Modal ============ */
