@@ -317,6 +317,7 @@ const iso = () => new Date().toISOString();
 const dt = ts => ts ? new Date(ts).toLocaleString('id-ID',{dateStyle:'medium',timeStyle:'short'}) : '-';
 const dd = ts => ts ? new Date(ts).toLocaleDateString('id-ID',{dateStyle:'medium'}) : '-';
 const dd2 = ts => { if(!ts) return '-'; const x=new Date(ts); return String(x.getDate()).padStart(2,'0')+'/'+String(x.getMonth()+1).padStart(2,'0')+'/'+String(x.getFullYear()).slice(2); };
+const daysUntil = ts => ts ? Math.ceil((new Date(ts).setHours(0,0,0,0)-new Date().setHours(0,0,0,0))/86400000) : null;
 const addDays = (ts,n) => { const x=new Date(ts); x.setDate(x.getDate()+(n||0)); return x.toISOString(); };
 /* ============ Data tetap perusahaan (untuk PO PDF) ============ */
 const COMPANY_ADDRESS = 'PT Citra Shipyard 12N, Treasury Tower, Kawasan District 8 LOT 28, Jl. Tulodong Atas 2 No.28, RT.5/RW.3, Senayan, Kec. Kby. Baru, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta (12190)';
@@ -461,6 +462,13 @@ function poCurrentApproverKey(po){
   if(po.status==='PENDING_DIRECTOR') return 'mgmt2';
   return po.needsDirector ? 'mgmt2' : 'mgmt1';
 }
+// Invoice termin (7/15/30 hari): true bila PO ini dibayar via invoice/termin, belum lunas,
+// dan sudah H-2 (atau lewat) dari tanggal jatuh tempo — dipakai untuk reminder Finance.
+function poInvoiceDueSoon(po){
+  if(!po.payment || !po.payment.termDays || po.payment.paid) return false;
+  const left = daysUntil(po.payment.dueDate);
+  return left!==null && left<=2;
+}
 function isActionable(t,d){
   if(t==='pr'||t==='wr'){
     if(d.status==='PENDING_USER') return canApproveDept(d.dept);
@@ -471,7 +479,15 @@ function isActionable(t,d){
     return false;
   }
   if(t==='src') return d.status==='OPEN' && can('purchasing');
-  if(t==='po'){ if(d.status==='PENDING_MGMT') return can('mgmt1'); if(d.status==='PENDING_DIRECTOR') return can('mgmt2'); if(d.status==='PENDING_FINANCE') return can('finance'); if(d.status==='APPROVED') return can('purchasing'); if(d.status==='SENT') return can('warehouse'); }
+  if(t==='po'){
+    const dueFlag = can('finance') && poInvoiceDueSoon(d);
+    if(d.status==='PENDING_MGMT') return can('mgmt1');
+    if(d.status==='PENDING_DIRECTOR') return can('mgmt2');
+    if(d.status==='PENDING_FINANCE') return can('finance');
+    if(d.status==='APPROVED') return can('purchasing') || dueFlag;
+    if(d.status==='SENT') return can('warehouse') || dueFlag;
+    if(d.status==='RECEIVED') return dueFlag;
+  }
   return false;
 }
 const countAct = t => coll(t).filter(d=>isActionable(t,d)).length;
@@ -572,6 +588,7 @@ function vDash(){
     ${statTile('📝','var(--orange)','var(--orangeb)','PO → PM','Menunggu','b-warn',cnt('po',d=>d.status==='PENDING_MGMT'),'Menunggu Project Manager')}
     ${statTile('👤','var(--teal)','var(--tealb)','PO → Direktur','Menunggu','b-warn',cnt('po',d=>d.status==='PENDING_DIRECTOR'),'Menunggu Direktur Operation')}
     ${statTile('💰','var(--pink)','var(--pinkb)','PO → Finance','Menunggu','b-warn',cnt('po',d=>d.status==='PENDING_FINANCE'),'Menunggu persetujuan Finance')}
+    ${statTile('⏰','var(--bad)','var(--badb)','Invoice Jatuh Tempo','H-2','b-bad',cnt('po',d=>poInvoiceDueSoon(d)),'Invoice termin yang perlu segera dibayar Finance')}
   </div>
   <div class="dash-bottom">
   <div class="card act-card"><div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:2px"><div><h3 style="margin:0 0 2px;font-size:15px">Perlu tindakan Anda</h3><span class="hint">Tindaklanjuti dokumen yang membutuhkan perhatian segera.</span></div>${act.length?`<a class="hint" style="color:var(--pri);font-weight:700;cursor:pointer" onclick="setTab('pr')">Lihat Semua ›</a>`:''}</div>
@@ -580,6 +597,7 @@ function vDash(){
       if(t==='po'){
         const lowInfo = d.reason ? '<span class="badge b-warn" title="'+esc(d.reason)+'">Bukan termurah</span>' : '<span class="badge b-ok">Termurah</span>';
         info = `<b>${rp(d.total)}</b> ${lowInfo}`;
+        if(poInvoiceDueSoon(d)){ const left=daysUntil(d.payment.dueDate); info += ` <span class="badge b-bad">${left<0?'Lewat jatuh tempo '+Math.abs(left)+' hari':left===0?'Jatuh tempo hari ini':'Jatuh tempo H-'+left}</span>`; }
       } else if(t==='pr'){
         info = d.priority==='Urgent' ? '<span class="badge b-bad">Urgent</span>' : '<span class="badge b-gray">Normal</span>';
       } else if(t==='wr'){
@@ -636,7 +654,7 @@ function vCat(){
   <div class="card">
     ${can('warehouse')?`<div class="btns" style="margin-bottom:10px"><button class="btn pri" onclick="formCatalogItem()">+ Tambah Item Katalog</button><button class="btn" onclick="exportCatalogExcel()">📊 Export Excel</button><button class="btn" onclick="document.getElementById('cat-import-file').click()">📥 Import/Update Excel</button><input type="file" id="cat-import-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importCatalogExcel(this)"></div>`:''}
     <div class="tw"><table><thead><tr><th>Kode</th><th>Nama item</th><th>No. Part</th><th>Brand</th><th>Sat</th><th class="r">Stok</th>${can('warehouse')?'<th></th>':''}</tr></thead><tbody>
-    ${S.catalog.map(c=>`<tr><td>${esc(c.code)}</td><td>${esc(c.name)}</td><td>${esc(c.partNumber||'-')}</td><td>${esc(c.brand||'-')}</td><td>${esc(c.uom)}</td><td class="r">${c.stock>0?fmt(c.stock):'<span class="badge b-bad">Kosong</span>'}</td>${can('warehouse')?`<td class="r"><button class="btn sm" onclick="formCatalogItem('${c.code}')">Ubah</button></td>`:''}</tr>`).join('')}
+    ${S.catalog.map(c=>`<tr><td>${esc(c.code)}</td><td>${esc(c.name)}</td><td>${esc(c.partNumber||'-')}</td><td>${esc(c.brand||'-')}</td><td>${esc(c.uom)}</td><td class="r">${c.stock>0?fmt(c.stock):'<span class="badge b-bad">Kosong</span>'}</td>${can('warehouse')?`<td class="r"><button class="btn sm" onclick="formCatalogItem('${c.code}')">Ubah</button> <button class="btn sm bad" onclick="deleteCatalogItem('${c.code}')">Hapus</button></td>`:''}</tr>`).join('')}
     </tbody></table></div>
   </div>`;
 }
@@ -665,6 +683,18 @@ function saveCatalogItem(origCode){
   if(origCode){ const c=S.catalog.find(x=>x.code===origCode); c.name=name; c.partNumber=partNumber; c.brand=brand; c.uom=uom; c.stock=stock; }
   else S.catalog.push({code,name,partNumber,brand,uom,stock});
   save(); closeModal(); render(); toast('Item katalog disimpan');
+}
+async function deleteCatalogItem(code){
+  if(!can('warehouse')) return;
+  const c = S.catalog.find(x=>x.code===code); if(!c) return;
+  if(!confirm(`Hapus item katalog "${c.name}" (${c.code}) secara permanen? Riwayat PR/WR/PO yang sudah pernah memakai item ini tidak berubah (datanya sudah tersalin terpisah), tapi item ini tidak akan bisa dipilih lagi untuk WR baru. Tindakan ini tidak bisa dibatalkan.`)) return;
+  try{
+    const {error} = await sb.from('catalog').delete().eq('code', code);
+    if(error) throw error;
+  }catch(e){ toast('Gagal menghapus item katalog: '+(e.message||e)); return; }
+  const i = S.catalog.findIndex(x=>x.code===code);
+  if(i>=0) S.catalog.splice(i,1);
+  render(); toast('Item katalog dihapus');
 }
 function exportCatalogExcel(){
   if(!can('warehouse')) return;
@@ -934,7 +964,7 @@ function docModal(t,id){
   else if(t==='po'){
     const src = S.src.find(s=>s.id===d.srcId);
     h += `<h3>${esc(d.no)} ${badge(ST.po,d.status)}</h3>`;
-    h += metaBox([['Supplier',esc(d.supplier)],['Alamat Supplier',esc(d.supplierAddress||'-')],['Fax',esc(d.supplierFax||'-')],['Attn',esc(d.supplierAttn||'-')],['Dikirim ke',esc(DELIVERY_PLACE).replace(/\n/g,'<br>')],['No. Quotation',esc(d.quoteNo||'-')],['Dept Req',esc(d.deptReq||'-')],['Referensi',src?`${esc(src.refNo)} ${linkBtn('src',src,'Quotation')}`:'-'],['Tanggal',dt(d.date)],['Lead time',d.leadDays?d.leadDays+' hari':'-'],['Approver Manajemen (saat ini)',esc(ROLES[poCurrentApproverKey(d)].name)],...(d.payment?[['Pembayaran',`${esc(d.payment.method)}${d.payment.ref?' — Ref: '+esc(d.payment.ref):''} (${dd(d.payment.date)})`]]:[]),...(d.reason?[['Alasan pemilihan',esc(d.reason)]]:[])]);
+    h += metaBox([['Supplier',esc(d.supplier)],['Alamat Supplier',esc(d.supplierAddress||'-')],['Fax',esc(d.supplierFax||'-')],['Attn',esc(d.supplierAttn||'-')],['Dikirim ke',esc(DELIVERY_PLACE).replace(/\n/g,'<br>')],['No. Quotation',esc(d.quoteNo||'-')],['Dept Req',esc(d.deptReq||'-')],['Referensi',src?`${esc(src.refNo)} ${linkBtn('src',src,'Quotation')}`:'-'],['Tanggal',dt(d.date)],['Lead time',d.leadDays?d.leadDays+' hari':'-'],['Approver Manajemen (saat ini)',esc(ROLES[poCurrentApproverKey(d)].name)],...(d.payment?[['Pembayaran',`${esc(d.payment.method)}${d.payment.ref?' — Ref: '+esc(d.payment.ref):''} (${dd(d.payment.date)})${d.payment.termDays?(d.payment.paid?' — <span class="badge b-ok">Lunas</span> '+dd(d.payment.paidDate):' — <span class="badge '+(poInvoiceDueSoon(d)?'b-bad':'b-warn')+'">Jatuh tempo '+dd(d.payment.dueDate)+'</span>'):''}`]]:[]),...(d.reason?[['Alasan pemilihan',esc(d.reason)]]:[])]);
     if(d.narrative) h += `<div class="sec"><h4>Naratif PO</h4><div class="hint" style="font-size:13px;color:var(--ink)">${esc(d.narrative)}</div></div>`;
     h += `<div class="sec"><h4>Item</h4><div class="tw"><table><thead><tr><th>#</th><th>Deskripsi</th><th>Model/Type/No. Part</th><th class="r">Qty</th><th>Sat</th><th class="r">Harga satuan</th><th class="r">Jumlah</th></tr></thead><tbody>
       ${d.items.map((it,i)=>`<tr><td>${i+1}</td><td>${esc(it.name)}</td><td>${esc(it.spec||'-')}</td><td class="r">${fmt(it.qty)}</td><td>${esc(it.uom)}</td><td class="r">${fmt(it.price,2)}</td><td class="r">${fmt(it.qty*it.price,2)}</td></tr>`).join('')}
@@ -953,7 +983,17 @@ function docModal(t,id){
     }
     if(d.payment && d.payment.proofData){
       const isImg = /^data:image\//.test(d.payment.proofData);
-      h += `<div class="sec"><h4>Bukti Pembayaran</h4>${isImg?`<img src="${d.payment.proofData}" style="max-width:260px;border:1px solid var(--line);border-radius:8px;display:block">`:''}<a class="btn sm" style="margin-top:6px;display:inline-block" href="${d.payment.proofData}" download="${esc(d.payment.proofName||'bukti-pembayaran')}" target="_blank">Unduh/Lihat: ${esc(d.payment.proofName||'file')}</a></div>`;
+      h += `<div class="sec"><h4>Bukti Pembayaran / Invoice</h4>${isImg?`<img src="${d.payment.proofData}" style="max-width:260px;border:1px solid var(--line);border-radius:8px;display:block">`:''}<a class="btn sm" style="margin-top:6px;display:inline-block" href="${d.payment.proofData}" download="${esc(d.payment.proofName||'bukti-pembayaran')}" target="_blank">Unduh/Lihat: ${esc(d.payment.proofName||'file')}</a></div>`;
+    }
+    if(d.payment && d.payment.termDays){
+      const left = daysUntil(d.payment.dueDate);
+      if(d.payment.paid){
+        h += `<div class="sec"><h4>Status Invoice Termin</h4><span class="badge b-ok">Lunas dibayar ${dd(d.payment.paidDate)}</span></div>`;
+      } else {
+        const overdue = left<0;
+        h += `<div class="${overdue||left<=2?'warnbox':'sec'}" style="${overdue?'border-color:#e8a8a8;background:#fdeaea':''}"><b>Invoice Termin ${d.payment.termDays} Hari — Belum Dibayar</b><br>Jatuh tempo: <b>${dd(d.payment.dueDate)}</b> ${overdue?`<span class="badge b-bad">Lewat jatuh tempo ${Math.abs(left)} hari</span>`:left<=2?`<span class="badge b-bad">H-${left}</span>`:`<span class="badge b-warn">H-${left}</span>`}
+          ${can('finance')?`<div class="btns" style="margin-top:8px"><button class="btn ok" onclick="markPaid('${d.id}')">Tandai Sudah Dibayar (Lunas)</button></div>`:''}</div>`;
+      }
     }
     if(d.status==='PENDING_MGMT'){
       if(can('mgmt1')) h += decisionBox('Setujui & teruskan ke '+(d.needsDirector?'Direktur Operation':'Finance'),'Tolak (kembali ke Purchasing)');
@@ -964,10 +1004,11 @@ function docModal(t,id){
     } else if(d.status==='PENDING_FINANCE'){
       if(can('finance')){
         h += `<div class="decide"><b>Proses pembayaran PO</b>
-          <div class="row" style="margin-top:8px"><div><label class="f">Metode Pembayaran</label><select id="pay-method"><option>Transfer Bank</option><option>Giro</option><option>Cash</option></select></div><div><label class="f">No Referensi / Bukti Bayar</label><input id="pay-ref" placeholder="mis. TRF-000123"></div></div>
-          <label class="f">Upload Bukti Transfer / Pembayaran</label><input type="file" id="pay-proof" accept="image/*,.pdf"><div class="hint">Opsional, disarankan file kecil (gambar/PDF) untuk prototype ini.</div>
+          <div class="row" style="margin-top:8px"><div><label class="f">Metode Pembayaran</label><select id="pay-method" onchange="togglePayTermin(this)"><option>Transfer Bank</option><option>Giro</option><option>Cash</option><option>Invoice - Termin 7 Hari</option><option>Invoice - Termin 15 Hari</option><option>Invoice - Termin 30 Hari</option></select></div><div><label class="f">No Referensi / No Invoice</label><input id="pay-ref" placeholder="mis. TRF-000123 / INV-000123"></div></div>
+          <div id="pay-termin-hint" class="hint" style="display:none;margin-top:-4px"></div>
+          <label class="f">Upload Bukti Transfer / Invoice</label><input type="file" id="pay-proof" accept="image/*,.pdf"><div class="hint">Opsional, disarankan file kecil (gambar/PDF) untuk prototype ini.</div>
           <textarea id="note" placeholder="Catatan (wajib diisi bila menolak)"></textarea>
-          <div class="btns"><button class="btn ok" onclick="decide('approve')">Proses pembayaran & lanjut ke PO PDF</button><button class="btn bad" onclick="decide('reject')">Tolak (kembali ke Purchasing)</button></div></div>`;
+          <div class="btns"><button class="btn ok" onclick="decide('approve')" id="pay-submit-btn">Proses pembayaran & lanjut ke PO PDF</button><button class="btn bad" onclick="decide('reject')">Tolak (kembali ke Purchasing)</button></div></div>`;
       } else h += `<div class="warnbox">Sudah disetujui Manajemen. Menunggu Tim Finance memproses pembayaran sebelum PO PDF dapat diterbitkan & dibagikan ke supplier.</div>`;
     }
     if(can('purchasing') && ['PENDING_MGMT','PENDING_DIRECTOR'].includes(d.status)){
@@ -1333,6 +1374,18 @@ function resetSrcAfterRejectPO(po,note,who){
   if(s.srcType==='PR'){ const pr=find('pr',s.srcId); if(pr){ pr.status='SOURCING'; hist(pr,'PO ditolak '+who,note); } }
   else { const wr=find('wr',s.srcId); if(wr) hist(wr,'PO ditolak '+who,note); }
 }
+function togglePayTermin(sel){
+  const m = /Termin (\d+) Hari/.exec(sel.value);
+  const hint = $('#pay-termin-hint'); const btn = $('#pay-submit-btn');
+  if(m){
+    const due = addDays(iso(), Number(m[1]));
+    hint.style.display = ''; hint.innerHTML = `Pembayaran belum dilakukan sekarang — jatuh tempo <b>${dd(due)}</b> (${m[1]} hari dari hari ini). PO tetap lanjut ke tahap kirim ke supplier, dan Finance akan diingatkan otomatis mulai H-2 sebelum jatuh tempo sampai ditandai lunas.`;
+    if(btn) btn.textContent = 'Catat Invoice Termin & lanjut ke PO PDF';
+  } else {
+    hint.style.display = 'none';
+    if(btn) btn.textContent = 'Proses pembayaran & lanjut ke PO PDF';
+  }
+}
 function decidePO(act,note){
   const po=find('po',current.id);
   if(po.status==='PENDING_MGMT'){
@@ -1363,10 +1416,15 @@ function decidePO(act,note){
       resetSrcAfterRejectPO(po,note,'Finance');
     } else {
       const method=($('#pay-method')?.value)||'Transfer Bank'; const ref=($('#pay-ref')?.value||'').trim();
+      const terminMatch = /Termin (\d+) Hari/.exec(method);
+      const termDays = terminMatch ? Number(terminMatch[1]) : null;
+      const invoiceDate = iso(); const dueDate = termDays ? addDays(invoiceDate,termDays) : null;
       const fileInput=document.querySelector('#pay-proof'); const file=fileInput&&fileInput.files&&fileInput.files[0];
       const finalizePayment = (proof) => {
-        po.payment={method,ref,date:iso(),proofName:proof?proof.name:null,proofData:proof?proof.data:null};
-        po.status='APPROVED'; hist(po,'Pembayaran diproses Finance',`${method}${ref?(' — Ref: '+ref):''}${proof?' — bukti: '+proof.name:''}`+(note?' — '+note:''));
+        po.payment={method,ref,date:invoiceDate,proofName:proof?proof.name:null,proofData:proof?proof.data:null,termDays,dueDate,paid:!termDays,paidDate:termDays?null:invoiceDate};
+        po.status='APPROVED';
+        hist(po, termDays?'Invoice termin dicatat Finance':'Pembayaran diproses Finance',
+          `${method}${ref?(' — Ref/No. Invoice: '+ref):''}${proof?' — bukti: '+proof.name:''}${termDays?' — Jatuh tempo '+dd(dueDate):''}`+(note?' — '+note:''));
         const s=S.src.find(x=>x.id===po.srcId);
         if(s){ if(s.srcType==='PR'){ const pr=find('pr',s.srcId); if(pr){ if(prReadyToClose(pr)){ pr.status='CLOSED'; hist(pr,'Semua item PR sudah di-PO & dibayar — PR ditutup',po.no); } else { hist(pr,'PO dibayar',po.no+' — masih ada item lain yang outstanding/menunggu PO'); } } } else { const wr=find('wr',s.srcId); if(wr) hist(wr,'PO terbit',po.no); } }
         refresh(); toast('Tersimpan');
@@ -1383,6 +1441,14 @@ function decidePO(act,note){
   refresh(); toast(act==='approve'?'Tersimpan':'PO ditolak');
 }
 function markSent(id){ const po=find('po',id); po.status='SENT'; hist(po,'Dikirim ke supplier',po.supplier); refresh(); toast('Status: terkirim ke supplier'); }
+function markPaid(id){
+  if(!can('finance')) return toast('Hanya Tim Finance yang dapat menandai pembayaran invoice ini');
+  const po=find('po',id); if(!po || !po.payment || !po.payment.termDays) return;
+  if(!confirm(`Tandai invoice ${po.payment.ref||po.no} sebagai sudah dibayar lunas?`)) return;
+  po.payment.paid=true; po.payment.paidDate=iso();
+  hist(po,'Invoice termin dibayar lunas',`${po.payment.method}${po.payment.ref?' — Ref: '+po.payment.ref:''}`);
+  refresh(); toast('Invoice ditandai lunas');
+}
 function cancelDoc(t,id){
   if(!can('purchasing')) return toast('Hanya Purchasing yang dapat membatalkan dokumen ini');
   const d = find(t,id); if(!d) return;
