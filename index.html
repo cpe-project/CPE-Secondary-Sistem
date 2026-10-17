@@ -257,6 +257,7 @@ const ROLES = {
   dh_engineering:{label:'Dept. Head Engineering',                   name:'(belum diisi)'},
   dh_hrga:       {label:'Dept. Head HRGA',                          name:'(belum diisi)'},
   purchasing:    {label:'Purchasing',                               name:'Tim Purchasing'},
+  validator:     {label:'Validator',                                name:'Edison'},
   mgmt1:         {label:'Project Manager (PO ≤ Rp5 jt)',            name:'Parto Jaya H Silitonga', title:'Project Manager'},
   mgmt2:         {label:'Operational Director (PO > Rp5 jt)',       name:'Faisal H Simangunsong', title:'Operational Director'},
   finance:       {label:'Finance',                                  name:'Eka Putri Shinta'},
@@ -282,6 +283,7 @@ const LOGIN_ACCOUNTS = [
   {role:'dh_engineering', label:'Dept. Head Engineering',  username:'depthead-engineering'},
   {role:'dh_hrga',        label:'Dept. Head HRGA',         username:'depthead-hrga'},
   {role:'purchasing',     label:'Purchasing',              username:'purchasing'},
+  {role:'validator',      label:'Validator',                username:'validator'},
   {role:'warehouse',      label:'Warehouse',                username:'warehouse'},
   {role:'planner',        label:'Planner',                 username:'planner'},
   {role:'user',           label:'User',                     username:'user'},
@@ -292,7 +294,7 @@ const SUPPLIERS = ['PT Sumber Teknik Mandiri','CV Berkah Alat Berat','PT Duta Sp
 const PR_ST = {PENDING_USER:['Menunggu Approval Head Departemen','warn'],PENDING_PM:['Menunggu Project Manajer','info'],PENDING_DIRECTOR:['Menunggu Direktur Operation','info'],SOURCING:['Proses Quotation','info'],PO_PROCESS:['PO Diproses','info'],CLOSED:['PO Terbit','ok'],REJECTED:['Ditolak','bad'],CANCELLED:['Dibatalkan Purchasing','bad']};
 const WR_ST = {PENDING_USER:['Menunggu Approval Head Departemen','warn'],WH_PROCESS:['Proses Warehouse','info'],SOURCING:['Tidak Ready – Quotation','warn'],PARTIAL:['Issue Sebagian – Sisa Quotation','warn'],ISSUED:['Sudah Di-issue','ok'],REJECTED:['Ditolak','bad']};
 const SRC_ST = {OPEN:['Perlu Quotation / PO','warn'],PO_CREATED:['PO Sudah Dibuat','ok']};
-const PO_ST = {PENDING_MGMT:['Menunggu Project Manajer','warn'],PENDING_DIRECTOR:['Menunggu Direktur Operation','warn'],PENDING_FINANCE:['Menunggu Finance','info'],APPROVED:['Dibayar – PDF Terbit','ok'],SENT:['Terkirim ke Supplier','ok'],RECEIVED:['Barang Diterima (Closed)','ok'],REJECTED:['Ditolak','bad'],CANCELLED:['Dibatalkan Purchasing','bad']};
+const PO_ST = {PENDING_VALIDATOR:['Menunggu Validator','warn'],PENDING_MGMT:['Menunggu Project Manajer','warn'],PENDING_DIRECTOR:['Menunggu Direktur Operation','warn'],PENDING_FINANCE:['Menunggu Finance','info'],APPROVED:['Dibayar – PDF Terbit','ok'],SENT:['Terkirim ke Supplier','ok'],RECEIVED:['Barang Diterima (Closed)','ok'],REJECTED:['Ditolak','bad'],CANCELLED:['Dibatalkan Purchasing','bad']};
 const ST = {pr:PR_ST,wr:WR_ST,src:SRC_ST,po:PO_ST};
 
 /* ============ Helper ============ */
@@ -458,6 +460,7 @@ function prReadyToClose(pr){
   return poIds.every(pid=>{ const po=find('po',pid); return po && ['APPROVED','SENT','RECEIVED'].includes(po.status); });
 }
 function poCurrentApproverKey(po){
+  if(po.status==='PENDING_VALIDATOR') return 'validator';
   if(po.status==='PENDING_MGMT') return 'mgmt1';
   if(po.status==='PENDING_DIRECTOR') return 'mgmt2';
   return po.needsDirector ? 'mgmt2' : 'mgmt1';
@@ -473,7 +476,6 @@ function isActionable(t,d){
   if(t==='pr'||t==='wr'){
     if(d.status==='PENDING_USER') return canApproveDept(d.dept);
     if(t==='pr' && d.status==='PENDING_PM') return can('mgmt1');
-    if(t==='pr' && d.status==='PENDING_DIRECTOR') return can('mgmt2');
     if(t==='wr' && d.status==='WH_PROCESS') return can('warehouse');
     if(d.status==='REJECTED') return can('user') || can('planner');
     return false;
@@ -481,6 +483,7 @@ function isActionable(t,d){
   if(t==='src') return d.status==='OPEN' && can('purchasing');
   if(t==='po'){
     const dueFlag = can('finance') && poInvoiceDueSoon(d);
+    if(d.status==='PENDING_VALIDATOR') return can('validator');
     if(d.status==='PENDING_MGMT') return can('mgmt1');
     if(d.status==='PENDING_DIRECTOR') return can('mgmt2');
     if(d.status==='PENDING_FINANCE') return can('finance');
@@ -525,7 +528,7 @@ function doSearch(){
 }
 
 /* ============ Tanda Tangan Digital ============ */
-const SIGN_ROLES = ['purchasing','mgmt1','mgmt2'];
+const SIGN_ROLES = ['purchasing','validator','mgmt1','mgmt2'];
 function manageSignatures(){
   current=null;
   showModal(`<h3>Tanda Tangan Digital</h3><div class="hint">Setiap pemegang peran mengunggah gambar tanda tangannya sendiri sekali (PNG/JPG). Tanda tangan ini otomatis tertempel di PO PDF saat PO dibuat (Purchasing) atau disetujui (Manajemen) — tidak perlu diunggah ulang tiap PO.</div>
@@ -585,6 +588,7 @@ function vDash(){
     ${statTile('📄','var(--pri)','var(--accentb)','PR Aktif','Proses','b-info',cnt('pr',d=>!['CLOSED','REJECTED','CANCELLED'].includes(d.status)),'Purchase Request berjalan')}
     ${statTile('🏬','var(--ok)','var(--okb)','WR Aktif','Proses','b-ok',cnt('wr',d=>!['ISSUED','REJECTED'].includes(d.status)),'Warehouse Request berjalan')}
     ${statTile('💬','var(--purple)','var(--purpleb)','Quotation','Menunggu','b-warn',cnt('src',d=>d.status==='OPEN'),'Menunggu penawaran supplier')}
+    ${statTile('✅','var(--info)','var(--infob)','PO → Validator','Menunggu','b-warn',cnt('po',d=>d.status==='PENDING_VALIDATOR'),'Menunggu validasi Edison')}
     ${statTile('📝','var(--orange)','var(--orangeb)','PO → PM','Menunggu','b-warn',cnt('po',d=>d.status==='PENDING_MGMT'),'Menunggu Project Manager')}
     ${statTile('👤','var(--teal)','var(--tealb)','PO → Direktur','Menunggu','b-warn',cnt('po',d=>d.status==='PENDING_DIRECTOR'),'Menunggu Direktur Operation')}
     ${statTile('💰','var(--pink)','var(--pinkb)','PO → Finance','Menunggu','b-warn',cnt('po',d=>d.status==='PENDING_FINANCE'),'Menunggu persetujuan Finance')}
@@ -620,11 +624,11 @@ function vInfo(){
   return `<div class="top"><h2>Informasi</h2><p>Alur proses dan aturan approval PR/WR/PO.</p></div>
   <div class="card"><h3 style="margin:0 0 4px;font-size:15px">Alur dokumen</h3>
     <div class="hint">Purchase Request — item belum terkatalog</div>
-    <div class="flow"><span>User buat PR</span><i>→</i><span>Approve Head Departemen</span><i>→</i><span>Approve Project Manajer</span><i>→</i><span>Purchasing: quotation</span><i>→</i><span>Buat PO</span><i>→</i><span>Approve Project Manajer</span><i>→</i><span>(&gt;5jt) Approve Direktur Operation</span><i>→</i><span>Finance proses bayar</span><i>→</i><span>PO PDF → Supplier</span></div>
+    <div class="flow"><span>User buat PR</span><i>→</i><span>Approve Head Departemen</span><i>→</i><span>Approve Project Manajer</span><i>→</i><span>Purchasing: quotation</span><i>→</i><span>Buat PO</span><i>→</i><span>Approve Validator</span><i>→</i><span>(≤5jt) Approve Project Manajer</span><i>→</i><span>(&gt;5jt) langsung Approve Direktur Operation</span><i>→</i><span>Finance proses bayar</span><i>→</i><span>PO PDF → Supplier</span></div>
     <div class="hint">Warehouse Request — item sudah terkatalog</div>
     <div class="flow"><span>User buat WR</span><i>→</i><span>Approve Head Departemen</span><i>→</i><span>Approve Project Manajer</span><i>→</i><span>Warehouse issue</span><i>→</i><span>Selesai bila ready</span></div>
-    <div class="flow"><span>Tidak ready</span><i>→</i><span>Purchasing: quotation</span><i>→</i><span>Buat PO</span><i>→</i><span>Approve Project Manajer</span><i>→</i><span>(&gt;5jt) Approve Direktur Operation</span><i>→</i><span>Finance proses bayar</span><i>→</i><span>PO PDF → Supplier</span></div>
-    <div class="hint">Approval PR: Head Departemen sesuai departemen pengaju (Plant-SM/Produksi/HSE/Engineering/HRGA — masing-masing punya akun login sendiri dan hanya bisa approve PR/WR dari departemennya) → ${esc(ROLES.mgmt1.name)} (Project Manager) → ${esc(ROLES.mgmt2.name)} (Operational Director), baru diteruskan ke Purchasing untuk quotation. Approval WR: cukup Head Departemen sesuai dept, langsung diteruskan ke Warehouse. Approval PO: selalu mulai dari ${esc(ROLES.mgmt1.name)} (Project Manager); bila total &gt; ${rp(LIMIT)} naik lagi ke ${esc(ROLES.mgmt2.name)} (Operational Director), baru lanjut Finance. PO baru bisa diterbitkan sebagai PDF ke supplier setelah pembayaran diproses oleh Finance. PR hanya bisa dibuat oleh User/Planner; WR hanya oleh Planner. Download laporan historis PR/PO tersedia untuk Purchasing, Planner, dan Dept. Head Plant-SM.</div>
+    <div class="flow"><span>Tidak ready</span><i>→</i><span>Purchasing: quotation</span><i>→</i><span>Buat PO</span><i>→</i><span>Approve Validator</span><i>→</i><span>(≤5jt) Approve Project Manajer</span><i>→</i><span>(&gt;5jt) langsung Approve Direktur Operation</span><i>→</i><span>Finance proses bayar</span><i>→</i><span>PO PDF → Supplier</span></div>
+    <div class="hint">Approval PR: Head Departemen sesuai departemen pengaju (Plant-SM/Produksi/HSE/Engineering/HRGA — masing-masing punya akun login sendiri dan hanya bisa approve PR/WR dari departemennya) → ${esc(ROLES.mgmt1.name)} (Project Manager), baru diteruskan ke Purchasing untuk quotation. Approval WR: cukup Head Departemen sesuai dept, langsung diteruskan ke Warehouse. Approval PO: setelah PO dibuat Purchasing, ${esc(ROLES.validator.name)} (Validator) memvalidasi lebih dulu; bila total &le; ${rp(LIMIT)} diteruskan ke ${esc(ROLES.mgmt1.name)} (Project Manager), tapi bila total &gt; ${rp(LIMIT)} langsung diteruskan ke ${esc(ROLES.mgmt2.name)} (Operational Director) tanpa melalui Project Manager — baru lanjut Finance. PO baru bisa diterbitkan sebagai PDF ke supplier setelah pembayaran diproses oleh Finance. PR hanya bisa dibuat oleh User/Planner; WR hanya oleh Planner. Download laporan historis PR/PO tersedia untuk Purchasing, Planner, dan Dept. Head Plant-SM.</div>
   </div>`;
 }
 
@@ -882,16 +886,15 @@ function docModal(t,id){
       h += `<div class="warnbox">${wr?'WR':'PR'} ini dibatalkan oleh Purchasing${lastCanc&&lastCanc.note?': '+esc(lastCanc.note):''}.</div>`;
     } else if(isActionable(t,d)){
       if(d.status==='PENDING_USER') h += decisionBoxHead(d.dept,'Setujui','Tolak');
-      else if(d.status==='PENDING_PM') h += decisionBox('Terima & teruskan ke Direktur Operation','Tolak');
-      else if(d.status==='PENDING_DIRECTOR') h += decisionBox('Terima & teruskan ke Purchasing','Tolak');
+      else if(d.status==='PENDING_PM') h += decisionBox('Terima & teruskan ke Purchasing','Tolak');
       else if(d.status==='WH_PROCESS'){
         h += `<div class="decide"><b>Issue barang</b><div class="hint">Isi jumlah yang di-issue. Nilai otomatis dibatasi stok. Sisa yang tidak ready diteruskan ke Purchasing untuk quotation.</div>
           <div class="tw"><table><thead><tr><th>Item</th><th class="r">Diminta</th><th class="r">Stok</th><th>Issue</th></tr></thead><tbody>
           ${d.items.map((it,i)=>{const c=S.catalog.find(x=>x.code===it.code);const def=Math.min(it.qty,c.stock);return `<tr><td>${esc(it.name)}</td><td class="r">${fmt(it.qty)}</td><td class="r">${fmt(c.stock)}</td><td><input class="iss" data-i="${i}" inputmode="decimal" value="${fmt(def)}" style="width:90px"></td></tr>`;}).join('')}
           </tbody></table></div><div class="btns"><button class="btn ok" onclick="issueWR()">Konfirmasi issue</button></div></div>`;
       }
-    } else if(['PENDING_USER','PENDING_PM','PENDING_DIRECTOR','WH_PROCESS'].includes(d.status)){
-      const who = {PENDING_USER:deptHeadLabel(d.dept),PENDING_PM:ROLES.mgmt1.label,PENDING_DIRECTOR:ROLES.mgmt2.label,WH_PROCESS:ROLES.warehouse.label}[d.status];
+    } else if(['PENDING_USER','PENDING_PM','WH_PROCESS'].includes(d.status)){
+      const who = {PENDING_USER:deptHeadLabel(d.dept),PENDING_PM:ROLES.mgmt1.label,WH_PROCESS:ROLES.warehouse.label}[d.status];
       h += `<div class="warnbox">Menunggu tindakan: ${esc(who)}.</div>`;
     }
     if(!wr){
@@ -995,12 +998,15 @@ function docModal(t,id){
           ${can('finance')?`<div class="btns" style="margin-top:8px"><button class="btn ok" onclick="markPaid('${d.id}')">Tandai Sudah Dibayar (Lunas)</button></div>`:''}</div>`;
       }
     }
-    if(d.status==='PENDING_MGMT'){
+    if(d.status==='PENDING_VALIDATOR'){
+      if(can('validator')) h += decisionBox('Validasi & teruskan ke '+(d.needsDirector?'Direktur Operation':'Project Manajer'),'Tolak (kembali ke Purchasing)');
+      else h += `<div class="warnbox">Menunggu validasi ${esc(ROLES.validator.name)} (Validator).</div>`;
+    } else if(d.status==='PENDING_MGMT'){
       if(can('mgmt1')) h += decisionBox('Setujui & teruskan ke '+(d.needsDirector?'Direktur Operation':'Finance'),'Tolak (kembali ke Purchasing)');
       else h += `<div class="warnbox">Menunggu approval ${esc(ROLES.mgmt1.name)} (Project Manajer).</div>`;
     } else if(d.status==='PENDING_DIRECTOR'){
       if(can('mgmt2')) h += decisionBox('Setujui & teruskan ke Finance','Tolak (kembali ke Purchasing)');
-      else h += `<div class="warnbox">Sudah disetujui Project Manajer. Menunggu approval ${esc(ROLES.mgmt2.name)} (Direktur Operation) karena nilai PO di atas ${rp(LIMIT)}.</div>`;
+      else h += `<div class="warnbox">${d.needsDirector?'Sudah divalidasi Validator — langsung ke':'Sudah disetujui Project Manajer. Menunggu approval'} ${esc(ROLES.mgmt2.name)} (Direktur Operation) karena nilai PO di atas ${rp(LIMIT)}.</div>`;
     } else if(d.status==='PENDING_FINANCE'){
       if(can('finance')){
         h += `<div class="decide"><b>Proses pembayaran PO</b>
@@ -1011,7 +1017,7 @@ function docModal(t,id){
           <div class="btns"><button class="btn ok" onclick="decide('approve')" id="pay-submit-btn">Proses pembayaran & lanjut ke PO PDF</button><button class="btn bad" onclick="decide('reject')">Tolak (kembali ke Purchasing)</button></div></div>`;
       } else h += `<div class="warnbox">Sudah disetujui Manajemen. Menunggu Tim Finance memproses pembayaran sebelum PO PDF dapat diterbitkan & dibagikan ke supplier.</div>`;
     }
-    if(can('purchasing') && ['PENDING_MGMT','PENDING_DIRECTOR'].includes(d.status)){
+    if(can('purchasing') && ['PENDING_VALIDATOR','PENDING_MGMT','PENDING_DIRECTOR'].includes(d.status)){
       h += `<div class="btns"><button class="btn bad" onclick="pdfPO('${d.id}',true)">Unduh PO PDF (Urgent – belum disetujui/dibayar)</button></div><div class="hint" style="margin-top:6px">Khusus kondisi mendesak. PDF akan ditandai "DRAFT – BELUM DISETUJUI/DIBAYAR" dan tercatat di riwayat PO.</div>`;
     }
     if(can('purchasing') && d.status==='PENDING_FINANCE'){
@@ -1208,11 +1214,8 @@ function decide(act){
     }
     else { d.status='REJECTED'; hist(d,'Ditolak '+headLabel,note,headName); }
   } else if(d.status==='PENDING_PM'){
-    if(act==='approve'){ d.status='PENDING_DIRECTOR'; hist(d,'Disetujui Project Manajer','Diteruskan ke Direktur Operation'); }
+    if(act==='approve'){ d.status='SOURCING'; mkSrc('PR',d,d.items.map(i=>({name:i.name,spec:i.spec,qty:i.qty,uom:i.uom}))); hist(d,'Disetujui Project Manajer','Diteruskan ke Purchasing untuk quotation'); }
     else { d.status='REJECTED'; hist(d,'Ditolak Project Manajer',note); }
-  } else if(d.status==='PENDING_DIRECTOR'){
-    if(act==='approve'){ d.status='SOURCING'; mkSrc('PR',d,d.items.map(i=>({name:i.name,spec:i.spec,qty:i.qty,uom:i.uom}))); hist(d,'Disetujui Direktur Operation','Diteruskan ke Purchasing untuk quotation'); }
-    else { d.status='REJECTED'; hist(d,'Ditolak Direktur Operation',note); }
   }
   refresh(); toast('Tersimpan');
 }
@@ -1347,8 +1350,8 @@ function createPO(srcId){
   const deptReq = refDoc?refDoc.dept:'-';
   const purpose = refDoc?refDoc.purpose:'';
   const needsDirector = total>LIMIT;
-  const po={id:uid(),no:nextNo('PO'),srcId:s.id,supplier:q.supplier,supplierAddress:q.address||'',supplierFax:q.fax||'',supplierAttn:q.attn||'',quoteNo:q.quoteNo||'',quoteFileName:q.fileName||'',quoteFileData:q.fileData||'',deptReq,purpose,narrative,leadDays:q.leadDays,items,discount,ppnRate:ppnOn?ppnRate:0,ppn,shipping,subtotal,total,reason,date:iso(),needsDirector,status:'PENDING_MGMT',history:[]};
-  hist(po,'PO dibuat',`Diajukan ke ${ROLES.mgmt1.name} (Project Manajer)`);
+  const po={id:uid(),no:nextNo('PO'),srcId:s.id,supplier:q.supplier,supplierAddress:q.address||'',supplierFax:q.fax||'',supplierAttn:q.attn||'',quoteNo:q.quoteNo||'',quoteFileName:q.fileName||'',quoteFileData:q.fileData||'',deptReq,purpose,narrative,leadDays:q.leadDays,items,discount,ppnRate:ppnOn?ppnRate:0,ppn,shipping,subtotal,total,reason,date:iso(),needsDirector,status:'PENDING_VALIDATOR',history:[]};
+  hist(po,'PO dibuat',`Diajukan ke ${ROLES.validator.name} (Validator)`);
   S.pos.unshift(po);
   targetIdx.forEach(i=>{ itemStatus[i]={poId:po.id}; });
   s.itemStatus = itemStatus;
@@ -1388,7 +1391,18 @@ function togglePayTermin(sel){
 }
 function decidePO(act,note){
   const po=find('po',current.id);
-  if(po.status==='PENDING_MGMT'){
+  if(po.status==='PENDING_VALIDATOR'){
+    if(!can('validator')) return toast('Hanya '+ROLES.validator.name+' (Validator) yang dapat memvalidasi PO ini');
+    if(act==='reject'){
+      if(!note) return toast('Catatan wajib diisi saat menolak');
+      po.status='REJECTED'; hist(po,'Ditolak Validator',note);
+      resetSrcAfterRejectPO(po,note,'Validator');
+    } else if(po.needsDirector){
+      po.status='PENDING_DIRECTOR'; hist(po,'Divalidasi Validator','Diteruskan langsung ke '+ROLES.mgmt2.name+' (Direktur Operation — nilai PO di atas '+rp(LIMIT)+')'+(note?' — '+note:''));
+    } else {
+      po.status='PENDING_MGMT'; hist(po,'Divalidasi Validator','Diteruskan ke '+ROLES.mgmt1.name+' (Project Manager)'+(note?' — '+note:''));
+    }
+  } else if(po.status==='PENDING_MGMT'){
     if(!can('mgmt1')) return toast('Hanya '+ROLES.mgmt1.name+' yang dapat memutuskan PO ini');
     if(act==='reject'){
       if(!note) return toast('Catatan wajib diisi saat menolak');
@@ -1552,11 +1566,22 @@ function pdfPO(id,draft){
   }
   y = Math.max(totalsBottom,narrBottom)+12;
   if(y>230){ d.addPage(); y=30; }
-  d.setFont('helvetica','normal'); d.setFontSize(9.5);
-  d.text('Disetujui oleh,',165,y,{align:'center'});
   const finalApproverKey = poCurrentApproverKey(po);
-  if(!draft) addSigToPdf(d,S.signatures[finalApproverKey],165,y+3,34,18);
-  if(!draft){ d.setFont('helvetica','bold'); d.text(ROLES[finalApproverKey].name,165,y+26,{align:'center'}); d.setFont('helvetica','normal'); d.setFontSize(8); d.text(ROLES[finalApproverKey].title||'Manajemen PT CPE',165,y+30,{align:'center'}); }
+  const validatedDone = po.status!=='PENDING_VALIDATOR';
+  const approvedDone = ['PENDING_FINANCE','APPROVED','SENT','RECEIVED'].includes(po.status);
+  const sigCols = [
+    {x:44,  label:'Dibuat oleh,',    key:'purchasing',  done:true},
+    {x:105, label:'Divalidasi oleh,', key:'validator',   done:validatedDone},
+    {x:166, label:'Disetujui oleh,', key:finalApproverKey, done:approvedDone}
+  ];
+  sigCols.forEach(c=>{
+    d.setFont('helvetica','normal'); d.setFontSize(9.5); d.text(c.label,c.x,y,{align:'center'});
+    if(c.done){
+      addSigToPdf(d,S.signatures[c.key],c.x,y+3,30,15);
+      d.setFont('helvetica','bold'); d.setFontSize(9); d.text(ROLES[c.key].name,c.x,y+24,{align:'center'});
+      d.setFont('helvetica','normal'); d.setFontSize(7.5); d.text(ROLES[c.key].title||ROLES[c.key].label,c.x,y+28,{align:'center'});
+    }
+  });
   if(draft){
     hist(po,'PO PDF diunduh (Urgent - Draft)','Diunduh oleh Purchasing sebelum disetujui/dibayar penuh — status saat ini: '+PO_ST[po.status][0]);
     refresh();
