@@ -249,7 +249,7 @@ window.__libsLoaded = true; // marker for the watchdog script below — reached 
 
 /* ============ Konfigurasi ============ */
 const ROLES = {
-  user:          {label:'User',                                    name:'Andi Saputra'},
+  user:          {label:'User',                                    name:'(belum diisi)'},
   planner:       {label:'Planner',                                 name:'Tim Planner'},
   dh_plantsm:    {label:'Dept. Head Plant-SM',                      name:'(belum diisi)'},
   dh_hse:        {label:'Dept. Head HSE',                           name:'(belum diisi)'},
@@ -274,6 +274,15 @@ const DEPT_OPTIONS = ['PLANT','SM','PRODUKSI','HSE','ENGINEERING','HRGA'];
 function deptHeadLabel(dept){ return {'PLANT-SM':'Head Plant-SM','PLANT':'Head Plant-SM','SM':'Head Plant-SM','PRODUKSI':'Head Produksi','HSE':'Head HSE','ENGINEERING':'Head Engineering','HRGA':'Head HRGA'}[dept] || 'Head Departemen'; }
 const DEPT_ROLE = {'PLANT-SM':'dh_plantsm','PLANT':'dh_plantsm','SM':'dh_plantsm','HSE':'dh_hse','PRODUKSI':'dh_produksi','ENGINEERING':'dh_engineering','HRGA':'dh_hrga'};
 function canApproveDept(dept){ return role==='admin' || role===DEPT_ROLE[dept]; }
+// Akun User kini satu per departemen (field 'dept' di profil) — departemen di form PR/WR
+// dikunci sesuai akun yang login, tidak lagi bisa dipilih bebas.
+function myLockedDept(){ return (role==='user' && myProfile && myProfile.dept) ? myProfile.dept : null; }
+function deptFieldHtml(selectedDept){
+  const locked = myLockedDept();
+  if(locked) return `<div><label class="f">Departemen</label><input value="${esc(locked)}" disabled><input type="hidden" id="f-dept" value="${esc(locked)}"></div>`;
+  return `<div><label class="f">Departemen *</label><select id="f-dept"><option value="">Pilih departemen</option>${DEPT_OPTIONS.map(x=>`<option ${selectedDept===x?'selected':''}>${x}</option>`).join('')}</select></div>`;
+}
+function getDeptFieldValue(){ return myLockedDept() || ($('#f-dept')?.value||''); }
 function canDownloadHistoris(){ return can('purchasing') || can('planner') || can('dh_plantsm'); }
 const LOGIN_ACCOUNTS = [
   {role:'mgmt2',          label:'Operational Director',    username:'operationaldirector'},
@@ -287,7 +296,12 @@ const LOGIN_ACCOUNTS = [
   {role:'validator',      label:'Validator',                username:'validator'},
   {role:'warehouse',      label:'Warehouse',                username:'warehouse'},
   {role:'planner',        label:'Planner',                 username:'planner'},
-  {role:'user',           label:'User',                     username:'user'},
+  {role:'user',           label:'User - Plant',             username:'user-plant'},
+  {role:'user',           label:'User - SM',                username:'user'},
+  {role:'user',           label:'User - Produksi',          username:'user-produksi'},
+  {role:'user',           label:'User - HSE',               username:'user-hse'},
+  {role:'user',           label:'User - Engineering',       username:'user-engineering'},
+  {role:'user',           label:'User - HRGA',              username:'user-hrga'},
   {role:'finance',        label:'Finance',                  username:'finance'},
   {role:'admin',          label:'Inventory',                username:'admin'}
 ];
@@ -1069,7 +1083,7 @@ function docModal(t,id){
 function formPR(){
   current=null;
   showModal(`<h3>Buat Purchase Request</h3><div class="hint">Untuk item yang belum ada di katalog.</div>
-  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" placeholder="Nama lengkap pemohon"></div><div><label class="f">Kode Unit *</label><input id="f-unit" placeholder="mis. DT-14, EX-02"></div><div><label class="f">Departemen *</label><select id="f-dept"><option value="">Pilih departemen</option>${DEPT_OPTIONS.map(x=>`<option>${x}</option>`).join('')}</select></div></div>
+  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" placeholder="Nama lengkap pemohon"></div><div><label class="f">Kode Unit *</label><input id="f-unit" placeholder="mis. DT-14, EX-02"></div>${deptFieldHtml('')}</div>
   <label class="f">Keperluan / alasan *</label><textarea id="f-note" placeholder="mis. penggantian komponen unit DT-14"></textarea>
   <div class="row"><div><label class="f">Prioritas</label><select id="f-prio"><option>Normal</option><option>Urgent</option></select></div><div><label class="f">Dibutuhkan tanggal</label><input type="date" id="f-need"></div></div>
   <label class="f">Item *</label><div id="rows"></div>
@@ -1096,7 +1110,7 @@ async function collectPRItemsWithImages(){
 }
 async function submitPR(){
   const items = await collectPRItemsWithImages();
-  const requester=$('#f-requester').value.trim(); const unitCode=$('#f-unit').value.trim(); const dept=$('#f-dept').value; const purpose=$('#f-note').value.trim();
+  const requester=$('#f-requester').value.trim(); const unitCode=$('#f-unit').value.trim(); const dept=getDeptFieldValue(); const purpose=$('#f-note').value.trim();
   if(!requester) return toast('Isi nama pemohon');
   if(!unitCode) return toast('Isi kode unit');
   if(!dept) return toast('Pilih departemen');
@@ -1111,7 +1125,7 @@ async function submitPR(){
 function formWR(){
   current=null;
   showModal(`<h3>Buat Warehouse Request</h3><div class="hint">Pilih item dari katalog. Bila stok tidak cukup, sisanya diteruskan ke Purchasing.</div>
-  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" placeholder="Nama lengkap pemohon"></div><div><label class="f">Kode Unit *</label><input id="f-unit" placeholder="mis. DT-14, EX-02"></div><div><label class="f">Departemen *</label><select id="f-dept"><option value="">Pilih departemen</option>${DEPT_OPTIONS.map(x=>`<option>${x}</option>`).join('')}</select></div></div>
+  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" placeholder="Nama lengkap pemohon"></div><div><label class="f">Kode Unit *</label><input id="f-unit" placeholder="mis. DT-14, EX-02"></div>${deptFieldHtml('')}</div>
   <label class="f">Keperluan / alasan *</label><textarea id="f-note" placeholder="mis. service PM 500 jam unit EX-02"></textarea>
   <label class="f">Dibutuhkan tanggal</label><input type="date" id="f-need">
   <label class="f">Item *</label><div id="rows"></div>
@@ -1138,7 +1152,7 @@ function wrHint(row){
 }
 function submitWR(){
   const items=[...document.querySelectorAll('#rows .row')].map(r=>{const c=wrCatalogByInput(r.querySelector('.i-item').value);if(!c) return null;return {code:c.code,name:c.name,spec:c.code,qty:parseNum(r.querySelector('.i-qty').value),uom:c.uom,issued:0,short:0};}).filter(i=>i&&i.qty>0);
-  const requester=$('#f-requester').value.trim(); const unitCode=$('#f-unit').value.trim(); const dept=$('#f-dept').value; const purpose=$('#f-note').value.trim();
+  const requester=$('#f-requester').value.trim(); const unitCode=$('#f-unit').value.trim(); const dept=getDeptFieldValue(); const purpose=$('#f-note').value.trim();
   if(!requester) return toast('Isi nama pemohon');
   if(!unitCode) return toast('Isi kode unit');
   if(!dept) return toast('Pilih departemen');
@@ -1153,7 +1167,7 @@ function submitWR(){
 function revisePR(id){
   const d=find('pr',id); current=null;
   showModal(`<h3>Revisi ${esc(d.no)}</h3><div class="hint">PR ini ditolak. Perbaiki lalu ajukan ulang.</div>
-  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" value="${esc(d.requester||'')}"></div><div><label class="f">Kode Unit *</label><input id="f-unit" value="${esc(d.unitCode||'')}"></div><div><label class="f">Departemen *</label><select id="f-dept"><option value="">Pilih departemen</option>${DEPT_OPTIONS.map(x=>`<option ${d.dept===x?'selected':''}>${x}</option>`).join('')}</select></div></div>
+  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" value="${esc(d.requester||'')}"></div><div><label class="f">Kode Unit *</label><input id="f-unit" value="${esc(d.unitCode||'')}"></div>${deptFieldHtml(d.dept)}</div>
   <label class="f">Keperluan / alasan *</label><textarea id="f-note">${esc(d.purpose)}</textarea>
   <div class="row"><div><label class="f">Prioritas</label><select id="f-prio"><option ${d.priority==='Normal'?'selected':''}>Normal</option><option ${d.priority==='Urgent'?'selected':''}>Urgent</option></select></div><div><label class="f">Dibutuhkan tanggal</label><input type="date" id="f-need" value="${esc(d.needBy||'')}"></div></div>
   <label class="f">Item * <span class="hint">(lampirkan gambar kebutuhan bila membantu memperjelas spesifikasi)</span></label><div id="rows"></div>
@@ -1168,7 +1182,7 @@ function revisePR(id){
 async function submitRevisePR(id){
   const d=find('pr',id);
   const items = await collectPRItemsWithImages();
-  const requester=$('#f-requester').value.trim(); const unitCode=$('#f-unit').value.trim(); const dept=$('#f-dept').value; const purpose=$('#f-note').value.trim();
+  const requester=$('#f-requester').value.trim(); const unitCode=$('#f-unit').value.trim(); const dept=getDeptFieldValue(); const purpose=$('#f-note').value.trim();
   if(!requester) return toast('Isi nama pemohon');
   if(!unitCode) return toast('Isi kode unit');
   if(!dept) return toast('Pilih departemen');
@@ -1182,7 +1196,7 @@ async function submitRevisePR(id){
 function reviseWR(id){
   const d=find('wr',id); current=null;
   showModal(`<h3>Revisi ${esc(d.no)}</h3><div class="hint">WR ini ditolak. Perbaiki lalu ajukan ulang.</div>
-  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" value="${esc(d.requester||'')}"></div><div><label class="f">Kode Unit *</label><input id="f-unit" value="${esc(d.unitCode||'')}"></div><div><label class="f">Departemen *</label><select id="f-dept"><option value="">Pilih departemen</option>${DEPT_OPTIONS.map(x=>`<option ${d.dept===x?'selected':''}>${x}</option>`).join('')}</select></div></div>
+  <div class="row"><div><label class="f">Nama Pemohon *</label><input id="f-requester" value="${esc(d.requester||'')}"></div><div><label class="f">Kode Unit *</label><input id="f-unit" value="${esc(d.unitCode||'')}"></div>${deptFieldHtml(d.dept)}</div>
   <label class="f">Keperluan / alasan *</label><textarea id="f-note">${esc(d.purpose)}</textarea>
   <label class="f">Dibutuhkan tanggal</label><input type="date" id="f-need" value="${esc(d.needBy||'')}">
   <label class="f">Item *</label><div id="rows"></div>
@@ -1197,7 +1211,7 @@ function reviseWR(id){
 function submitReviseWR(id){
   const d=find('wr',id);
   const items=[...document.querySelectorAll('#rows .row')].map(r=>{const c=wrCatalogByInput(r.querySelector('.i-item').value);if(!c) return null;return {code:c.code,name:c.name,spec:c.code,qty:parseNum(r.querySelector('.i-qty').value),uom:c.uom,issued:0,short:0};}).filter(i=>i&&i.qty>0);
-  const requester=$('#f-requester').value.trim(); const unitCode=$('#f-unit').value.trim(); const dept=$('#f-dept').value; const purpose=$('#f-note').value.trim();
+  const requester=$('#f-requester').value.trim(); const unitCode=$('#f-unit').value.trim(); const dept=getDeptFieldValue(); const purpose=$('#f-note').value.trim();
   if(!requester) return toast('Isi nama pemohon');
   if(!unitCode) return toast('Isi kode unit');
   if(!dept) return toast('Pilih departemen');
