@@ -139,9 +139,22 @@ label.f{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;font-w
 .warnbox{background:var(--warnb);color:var(--warn);border-radius:9px;padding:9px 12px;font-size:12.5px;margin-top:8px;border:1px solid #f3e0b0}
 .decide{background:#f7f9fc;border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px;margin-top:12px}
 .lowest{background:var(--okb)}
-.flow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0 14px}
-.flow span{background:linear-gradient(120deg,#eef3fb,#e6edfa);color:var(--pri-dark);border-radius:20px;padding:5px 11px;font-size:11.5px;font-weight:600;box-shadow:var(--shadow-sm)}
-.flow i{color:var(--muted2);font-style:normal}
+.steps{display:flex;flex-direction:column;gap:0;margin:8px 0 6px}
+.steps .step{display:flex;gap:12px;position:relative;padding-bottom:20px}
+.steps .step:last-child{padding-bottom:0}
+.steps .step:not(:last-child):before{content:'';position:absolute;left:13px;top:28px;bottom:-6px;width:2px;background:var(--line)}
+.steps .num{flex:0 0 26px;width:26px;height:26px;border-radius:50%;background:var(--infob);color:var(--pri-dark);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;z-index:1}
+.steps .txt{padding-top:2px;flex:1;min-width:0}
+.steps .txt b{font-size:13px;color:var(--ink);display:block;font-weight:700}
+.steps .txt .sub{display:block;font-size:11.5px;color:var(--mut);margin-top:2px;line-height:1.4}
+.steps .branch{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.steps .branch .opt{background:#f7f9fc;border:1px solid var(--line);border-radius:10px;padding:7px 11px;font-size:11.5px;flex:1;min-width:150px}
+.steps .branch .opt b{display:block;font-size:10.5px;color:var(--pri-dark);margin-bottom:3px;text-transform:uppercase;letter-spacing:.2px;font-weight:800}
+.rules{margin:4px 0 0;padding-left:0;list-style:none}
+.rules li{font-size:12.5px;color:var(--mut);margin-bottom:10px;line-height:1.55;padding-left:16px;position:relative}
+.rules li:last-child{margin-bottom:0}
+.rules li:before{content:'';position:absolute;left:0;top:7px;width:6px;height:6px;border-radius:50%;background:var(--pri2)}
+.rules li b{color:var(--ink)}
 #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(6px);background:#161d2e;color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;font-weight:500;opacity:0;transition:.25s;z-index:50;pointer-events:none;box-shadow:var(--shadow-lg)}
 #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
 .empty{color:var(--mut);padding:24px;text-align:center;font-size:13px}
@@ -644,14 +657,68 @@ function vDash(){
 }
 
 function vInfo(){
+  const stepsHtml = steps => `<div class="steps">${steps.map((s,i)=>`
+    <div class="step">
+      <div class="num">${i+1}</div>
+      <div class="txt">
+        <b>${s.t}</b>
+        ${s.s?`<span class="sub">${s.s}</span>`:''}
+        ${s.b?`<div class="branch">${s.b.map(o=>`<div class="opt"><b>${o.k}</b>${o.v}</div>`).join('')}</div>`:''}
+      </div>
+    </div>`).join('')}</div>`;
+
+  const poTail = [
+    {t:'Purchasing buat quotation'},
+    {t:'Purchasing buat PO'},
+    {t:'Validator memvalidasi PO', s:`${esc(ROLES.validator.name)} mengecek PO sebelum lanjut ke manajemen.`},
+    {t:'Approval sesuai nilai PO', b:[
+      {k:`PO &le; ${rp(LIMIT)}`, v:`Approve ${esc(ROLES.mgmt1.name)} (Project Manager)`},
+      {k:`PO &gt; ${rp(LIMIT)}`, v:`Langsung approve ${esc(ROLES.mgmt2.name)} (Direktur Operation), tanpa Project Manager`}
+    ]},
+    {t:'Finance proses pembayaran', s:'Transfer langsung, atau invoice dengan termin 7/15/30 hari.'},
+    {t:'PO diterbitkan sebagai PDF ke Supplier'}
+  ];
+
+  const prSteps = [
+    {t:'User buat PR', s:'Untuk item yang belum ada di katalog.'},
+    {t:'Approve Head Departemen', s:'Sesuai departemen pengaju (Plant, SM, Produksi, HSE, Engineering, HRGA).'},
+    {t:'Approve Project Manajer'},
+    ...poTail
+  ];
+
+  const wrSteps = [
+    {t:'User buat WR', s:'Untuk item yang sudah ada di katalog.'},
+    {t:'Approve Head Departemen', s:'Sesuai departemen pengaju.'},
+    {t:'Approve Project Manajer'},
+    {t:'Warehouse cek stok', b:[
+      {k:'Stok ready', v:'Warehouse issue barang → selesai.'},
+      {k:'Stok tidak cukup', v:'Sisa kebutuhan lanjut ke proses PO (lihat di bawah).'}
+    ]}
+  ];
+
   return `<div class="top"><h2>Informasi</h2><p>Alur proses dan aturan approval PR/WR/PO.</p></div>
-  <div class="card"><h3 style="margin:0 0 4px;font-size:15px">Alur dokumen</h3>
-    <div class="hint">Purchase Request — item belum terkatalog</div>
-    <div class="flow"><span>User buat PR</span><i>→</i><span>Approve Head Departemen</span><i>→</i><span>Approve Project Manajer</span><i>→</i><span>Purchasing: quotation</span><i>→</i><span>Buat PO</span><i>→</i><span>Approve Validator</span><i>→</i><span>(≤5jt) Approve Project Manajer</span><i>→</i><span>(&gt;5jt) langsung Approve Direktur Operation</span><i>→</i><span>Finance proses bayar</span><i>→</i><span>PO PDF → Supplier</span></div>
-    <div class="hint">Warehouse Request — item sudah terkatalog</div>
-    <div class="flow"><span>User buat WR</span><i>→</i><span>Approve Head Departemen</span><i>→</i><span>Approve Project Manajer</span><i>→</i><span>Warehouse issue</span><i>→</i><span>Selesai bila ready</span></div>
-    <div class="flow"><span>Tidak ready</span><i>→</i><span>Purchasing: quotation</span><i>→</i><span>Buat PO</span><i>→</i><span>Approve Validator</span><i>→</i><span>(≤5jt) Approve Project Manajer</span><i>→</i><span>(&gt;5jt) langsung Approve Direktur Operation</span><i>→</i><span>Finance proses bayar</span><i>→</i><span>PO PDF → Supplier</span></div>
-    <div class="hint">Approval PR: Head Departemen sesuai departemen pengaju (Plant-SM/Produksi/HSE/Engineering/HRGA — masing-masing punya akun login sendiri dan hanya bisa approve PR/WR dari departemennya) → ${esc(ROLES.mgmt1.name)} (Project Manager), baru diteruskan ke Purchasing untuk quotation. Approval WR: cukup Head Departemen sesuai dept, langsung diteruskan ke Warehouse. Approval PO: setelah PO dibuat Purchasing, ${esc(ROLES.validator.name)} (Validator) memvalidasi lebih dulu; bila total &le; ${rp(LIMIT)} diteruskan ke ${esc(ROLES.mgmt1.name)} (Project Manager), tapi bila total &gt; ${rp(LIMIT)} langsung diteruskan ke ${esc(ROLES.mgmt2.name)} (Operational Director) tanpa melalui Project Manager — baru lanjut Finance. PO baru bisa diterbitkan sebagai PDF ke supplier setelah pembayaran diproses oleh Finance. PR hanya bisa dibuat oleh User/Planner; WR hanya oleh Planner. Download laporan historis PR/PO tersedia untuk Purchasing, Planner, dan Dept. Head Plant-SM.</div>
+  <div class="card">
+    <h3 style="margin:0 0 4px;font-size:15px">📝 Alur Purchase Request (PR)</h3>
+    <div class="hint" style="margin-bottom:8px">Untuk item yang belum terkatalog.</div>
+    ${stepsHtml(prSteps)}
+  </div>
+  <div class="card">
+    <h3 style="margin:0 0 4px;font-size:15px">📦 Alur Warehouse Request (WR)</h3>
+    <div class="hint" style="margin-bottom:8px">Untuk item yang sudah terkatalog.</div>
+    ${stepsHtml(wrSteps)}
+    <div class="hint" style="margin:14px 0 8px">Lanjutan proses, jika stok tidak cukup:</div>
+    ${stepsHtml(poTail)}
+  </div>
+  <div class="card">
+    <h3 style="margin:0 0 10px;font-size:15px">ℹ️ Aturan approval &amp; akses</h3>
+    <ul class="rules">
+      <li><b>Approval PR:</b> Head Departemen sesuai departemen pengaju (Plant, SM, Produksi, HSE, Engineering, HRGA — masing-masing punya akun login sendiri dan hanya bisa approve PR/WR dari departemennya) → ${esc(ROLES.mgmt1.name)} (Project Manager), baru diteruskan ke Purchasing.</li>
+      <li><b>Approval WR:</b> cukup Head Departemen sesuai departemen, langsung diteruskan ke Warehouse.</li>
+      <li><b>Approval PO:</b> setelah PO dibuat Purchasing, ${esc(ROLES.validator.name)} (Validator) memvalidasi lebih dulu. Bila total &le; ${rp(LIMIT)} diteruskan ke ${esc(ROLES.mgmt1.name)} (Project Manager); bila total &gt; ${rp(LIMIT)} langsung ke ${esc(ROLES.mgmt2.name)} (Direktur Operation) tanpa Project Manager — baru lanjut Finance.</li>
+      <li><b>Penerbitan PO:</b> PO baru bisa diterbitkan sebagai PDF ke supplier setelah pembayaran diproses oleh Finance.</li>
+      <li><b>Pembuatan dokumen:</b> PR hanya bisa dibuat oleh User/Planner; WR hanya oleh Planner.</li>
+      <li><b>Laporan historis:</b> download PR/PO tersedia untuk Purchasing, Planner, dan Dept. Head Plant-SM.</li>
+    </ul>
   </div>`;
 }
 
