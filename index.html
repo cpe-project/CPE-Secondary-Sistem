@@ -285,6 +285,9 @@ const DEPTS = ['PLANT-SM','PRODUKSI','HSE','ENGINEERING','HRGA'];
 // Options shown in the create/revise dropdown: PLANT-SM is split into PLANT and SM for selection,
 // but both still resolve (via DEPT_ROLE below) to the single combined Plant-SM department-head approver.
 const DEPT_OPTIONS = ['PLANT','SM','PRODUKSI','HSE','ENGINEERING','HRGA'];
+// Kode singkat per departemen, dipakai sebagai awalan nomor PR supaya departemen asal langsung
+// terlihat dari nomornya (mis. PR-PLT-2610-001), dengan hitungan urut terpisah per departemen.
+const DEPT_CODE = {PLANT:'PLT', SM:'SM', PRODUKSI:'PRD', HSE:'HSE', ENGINEERING:'ENG', HRGA:'HRGA'};
 function deptHeadLabel(dept){ return {'PLANT-SM':'Head Plant-SM','PLANT':'Head Plant-SM','SM':'Head Plant-SM','PRODUKSI':'Head Produksi','HSE':'Head HSE','ENGINEERING':'Head Engineering','HRGA':'Head HRGA'}[dept] || 'Head Departemen'; }
 const DEPT_ROLE = {'PLANT-SM':'dh_plantsm','PLANT':'dh_plantsm','SM':'dh_plantsm','HSE':'dh_hse','PRODUKSI':'dh_produksi','ENGINEERING':'dh_engineering','HRGA':'dh_hrga'};
 function canApproveDept(dept){ return role==='admin' || role===DEPT_ROLE[dept]; }
@@ -330,25 +333,21 @@ const NOTIFY_TARGETS = [
 ];
 async function manageNotifyTelegram(){
   current=null;
-  let rows=[];
+  if(!session) return toast('Anda harus login untuk mengatur notifikasi');
+  let row=null;
   try{
-    const {data,error} = await sb.from('profiles').select('id,role,dept,name,telegram_chat_id');
+    const {data,error} = await sb.from('profiles').select('id,role,dept,name,telegram_chat_id').eq('id',session.user.id).maybeSingle();
     if(error) throw error;
-    rows = data||[];
+    row = data;
   }catch(e){ return toast('Gagal memuat data notifikasi: '+(e.message||e)); }
-  const findRow = (role,dept) => rows.find(r=>r.role===role && (dept===undefined || r.dept===dept));
-  showModal(`<h3>Notifikasi Telegram</h3><div class="hint">Setiap pemegang peran mendaftarkan Chat ID Telegram miliknya sendiri sekali. Aplikasi akan otomatis mengirim pesan ke Chat ID ini setiap kali ada PR/WR/PO baru atau keputusan approval yang jadi giliran peran tersebut. Cara dapat Chat ID: chat bot ini di Telegram, lalu kirim pesan apa saja — atau tanyakan ke admin.</div>
-  ${NOTIFY_TARGETS.map(tg=>{
-    const row = findRow(tg.role, tg.dept);
-    const chatId = row ? row.telegram_chat_id : null;
-    const mine = row ? (session && row.id===session.user.id) : false;
-    const rid = row ? row.id : '';
-    return `<div class="row" style="align-items:flex-start;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
-      <div style="flex:1;min-width:150px"><b>${esc(tg.label)}</b>${row&&row.name?`<br><span class="hint">${esc(row.name)}</span>`:''}</div>
-      <div style="flex:1;min-width:170px">${mine?`<input id="tg-${rid}" value="${esc(chatId||'')}" placeholder="Chat ID Telegram"><button class="btn sm" style="margin-top:6px" onclick="saveTelegramChatId('${rid}')">Simpan</button>`:(chatId?'<span class="badge b-ok">Sudah diisi</span>':'<span class="hint">Belum diisi</span>')}</div>
-      <div style="flex:1;min-width:170px">${!mine?'<span class="hint">Hanya akun peran ini yang bisa mengisi (login sebagai akun tersebut).</span>':''}</div>
-    </div>`;
-  }).join('')}
+  if(!row) return toast('Profil akun tidak ditemukan');
+  const tg = NOTIFY_TARGETS.find(t=>t.role===row.role && (t.dept===undefined || t.dept===row.dept)) || {label: row.name||row.role};
+  const chatId = row.telegram_chat_id;
+  showModal(`<h3>Notifikasi Telegram</h3><div class="hint">Daftarkan Chat ID Telegram Anda sekali. Aplikasi akan otomatis mengirim pesan ke Chat ID ini setiap kali ada PR/WR/PO baru atau keputusan approval yang jadi giliran peran Anda (${esc(tg.label)}). Cara dapat Chat ID: chat <b>@userinfobot</b> di Telegram, kirim pesan apa saja, lalu salin angka "Id" yang dibalasnya. Jangan lupa juga chat bot notifikasi kita (<b>@cpe_purchasing_bot</b>) minimal sekali, supaya Telegram mengizinkan bot mengirim pesan ke Anda.</div>
+  <div class="row" style="align-items:flex-start;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+    <div style="flex:1;min-width:150px"><b>${esc(tg.label)}</b>${row.name?`<br><span class="hint">${esc(row.name)}</span>`:''}</div>
+    <div style="flex:1;min-width:170px"><input id="tg-${row.id}" value="${esc(chatId||'')}" placeholder="Chat ID Telegram"><button class="btn sm" style="margin-top:6px" onclick="saveTelegramChatId('${row.id}')">Simpan</button></div>
+  </div>
   <div class="btns" style="margin-top:14px"><button class="btn" onclick="closeModal()">Tutup</button></div>`);
 }
 async function saveTelegramChatId(profileId){
@@ -368,7 +367,8 @@ const LOGIN_ACCOUNTS = [
   {role:'dh_produksi',    label:'Dept. Head Production',   username:'depthead-production'},
   {role:'dh_engineering', label:'Dept. Head Engineering',  username:'depthead-engineering'},
   {role:'dh_hrga',        label:'Dept. Head HRGA',         username:'depthead-hrga'},
-  {role:'purchasing',     label:'Purchasing',              username:'purchasing'},
+  {role:'purchasing',     label:'Purchasing - Rahmatullah Amin', username:'purchasing-rahmat'},
+  {role:'purchasing',     label:'Purchasing - Sulfikar',   username:'purchasing-sulfikar'},
   {role:'validator',      label:'Validator',                username:'validator'},
   {role:'warehouse',      label:'Warehouse',                username:'warehouse'},
   {role:'planner',        label:'Planner',                 username:'planner'},
@@ -550,11 +550,17 @@ let session = null, myProfile = null;
 function actorName(){ return (myProfile && myProfile.name) || (role && ROLES[role] && ROLES[role].name) || '-'; }
 function can(r){ return role===r || role==='admin'; }
 
-function nextNo(type){
-  S.seq[type] = (S.seq[type]||0)+1;
-  const n = String(S.seq[type]).padStart(3,'0');
+function nextNo(type, dept){
+  // PR pakai hitungan terpisah per departemen (kunci seq "PR-<KODE>") supaya nomornya mulai dari
+  // 001 lagi tiap departemen dan langsung kelihatan asal departemennya dari nomornya.
+  const deptCode = (type==='PR' && dept) ? DEPT_CODE[dept] : null;
+  const key = deptCode ? `PR-${deptCode}` : type;
+  S.seq[key] = (S.seq[key]||0)+1;
+  const n = String(S.seq[key]).padStart(3,'0');
   const y = new Date().toISOString().slice(2,4)+new Date().toISOString().slice(5,7);
-  return type==='PO' ? `PO/CPE/${y}/${n}` : `${type}-${y}-${n}`;
+  if(type==='PO') return `PO/CPE/${y}/${n}`;
+  if(deptCode) return `PR-${deptCode}-${y}-${n}`;
+  return `${type}-${y}-${n}`;
 }
 const coll = t => ({pr:S.prs,wr:S.wrs,src:S.src,po:S.pos}[t]);
 const find = (t,id) => coll(t).find(x=>x.id===id);
@@ -648,23 +654,26 @@ function doSearch(){
 const SIGN_ROLES = ['validator','mgmt1','mgmt2'];
 function manageSignatures(){
   current=null;
-  showModal(`<h3>Tanda Tangan Digital</h3><div class="hint">Setiap pemegang peran mengunggah gambar tanda tangannya sendiri sekali (PNG/JPG). Tanda tangan ini otomatis tertempel di PO PDF saat PO dibuat (Purchasing) atau disetujui (Manajemen) — tidak perlu diunggah ulang tiap PO.</div>
-  ${PURCHASING_CREATORS.map(nm=>{
-    const sig=S.signatures[nm]; const mine=can('purchasing');
-    return `<div class="row" style="align-items:flex-start;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
-      <div style="flex:1;min-width:150px"><b>Purchasing</b><br><span class="hint">${esc(nm)}</span></div>
-      <div style="flex:1;min-width:150px">${sig?`<img src="${sig}" style="max-height:50px;max-width:160px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:2px">`:'<span class="hint">Belum ada tanda tangan</span>'}</div>
-      <div style="flex:1;min-width:170px">${mine?`<input type="file" accept="image/png,image/jpeg" onchange="uploadSignature('${esc(nm)}',this)">${sig?`<button class="btn sm bad" style="margin-top:6px" onclick="clearSignature('${esc(nm)}')">Hapus</button>`:''}`:'<span class="hint">Hanya akun Purchasing yang bisa mengunggah (login sebagai akun tersebut).</span>'}</div>
-    </div>`;
-  }).join('')}
-  ${SIGN_ROLES.map(rk=>{
-    const sig=S.signatures[rk]; const mine=can(rk);
-    return `<div class="row" style="align-items:flex-start;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
-      <div style="flex:1;min-width:150px"><b>${esc(ROLES[rk].label)}</b><br><span class="hint">${esc(ROLES[rk].name)}</span></div>
-      <div style="flex:1;min-width:150px">${sig?`<img src="${sig}" style="max-height:50px;max-width:160px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:2px">`:'<span class="hint">Belum ada tanda tangan</span>'}</div>
-      <div style="flex:1;min-width:170px">${mine?`<input type="file" accept="image/png,image/jpeg" onchange="uploadSignature('${rk}',this)">${sig?`<button class="btn sm bad" style="margin-top:6px" onclick="clearSignature('${rk}')">Hapus</button>`:''}`:'<span class="hint">Hanya pemilik akun peran ini yang bisa mengunggah (login sebagai akun tersebut).</span>'}</div>
-    </div>`;
-  }).join('')}
+  const rows = [
+    ...(PURCHASING_CREATORS.filter(nm=>can('purchasing') && myProfile && myProfile.name===nm).map(nm=>{
+      const sig=S.signatures[nm];
+      return `<div class="row" style="align-items:flex-start;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+        <div style="flex:1;min-width:150px"><b>Purchasing</b><br><span class="hint">${esc(nm)}</span></div>
+        <div style="flex:1;min-width:150px">${sig?`<img src="${sig}" style="max-height:50px;max-width:160px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:2px">`:'<span class="hint">Belum ada tanda tangan</span>'}</div>
+        <div style="flex:1;min-width:170px"><input type="file" accept="image/png,image/jpeg" onchange="uploadSignature('${esc(nm)}',this)">${sig?`<button class="btn sm bad" style="margin-top:6px" onclick="clearSignature('${esc(nm)}')">Hapus</button>`:''}</div>
+      </div>`;
+    })),
+    ...SIGN_ROLES.filter(rk=>can(rk)).map(rk=>{
+      const sig=S.signatures[rk];
+      return `<div class="row" style="align-items:flex-start;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+        <div style="flex:1;min-width:150px"><b>${esc(ROLES[rk].label)}</b><br><span class="hint">${esc(ROLES[rk].name)}</span></div>
+        <div style="flex:1;min-width:150px">${sig?`<img src="${sig}" style="max-height:50px;max-width:160px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:2px">`:'<span class="hint">Belum ada tanda tangan</span>'}</div>
+        <div style="flex:1;min-width:170px"><input type="file" accept="image/png,image/jpeg" onchange="uploadSignature('${rk}',this)">${sig?`<button class="btn sm bad" style="margin-top:6px" onclick="clearSignature('${rk}')">Hapus</button>`:''}</div>
+      </div>`;
+    })
+  ];
+  showModal(`<h3>Tanda Tangan Digital</h3><div class="hint">Unggah gambar tanda tangan Anda sekali (PNG/JPG). Tanda tangan ini otomatis tertempel di PO PDF saat PO dibuat (Purchasing) atau disetujui (Manajemen) — tidak perlu diunggah ulang tiap PO.</div>
+  ${rows.length?rows.join(''):'<div class="hint" style="margin-top:10px">Akun ini tidak memiliki tanda tangan yang perlu diunggah.</div>'}
   <div class="btns" style="margin-top:14px"><button class="btn" onclick="closeModal()">Tutup</button></div>`);
 }
 function uploadSignature(rk,input){
@@ -1133,7 +1142,7 @@ function docModal(t,id){
         const defPpn = Math.round(defTotal*0.11);
         h += `<div class="decide"><b>Buat PO dari quotation terpilih</b>
           <div class="hint" style="margin-bottom:6px">PO hanya akan dibuat untuk item yang tercakup quotation yang dipilih. Item lain yang belum dapat quotation tetap outstanding di sini, menunggu penawaran berikutnya.</div>
-          <div><label class="f">Dibuat oleh (Purchasing)</label><select id="po-creator"><option value="">— pilih nama —</option>${PURCHASING_CREATORS.map(nm=>`<option value="${esc(nm)}">${esc(nm)}</option>`).join('')}</select></div>
+          <div><label class="f">Dibuat oleh (Purchasing)</label><input value="${esc((myProfile&&myProfile.name)||'')}" disabled></div>
           <div class="row" style="margin-top:8px"><div><label class="f">Diskon (Rp)</label><input id="po-disc" inputmode="decimal" placeholder="0" oninput="fmtInput(this);updatePpnAuto('${d.id}')"></div><div><label class="f">Biaya pengiriman (Rp)</label><input id="po-ship" inputmode="decimal" placeholder="0" oninput="fmtInput(this)"></div></div>
           <div class="row"><div><label class="f"><input type="checkbox" id="po-ppn-on" checked onchange="updatePpnAuto('${d.id}')" style="width:auto;vertical-align:middle;margin-right:4px">Kena PPN</label></div><div><label class="f">Bantu hitung dari rate (%)</label><input id="po-ppn-rate" inputmode="decimal" value="11" style="width:80px" oninput="updatePpnAuto('${d.id}')"></div><div><label class="f">PPN (Rp) — bisa diisi manual</label><input id="po-ppn-amt" inputmode="decimal" value="${fmt(defPpn)}" style="width:130px"></div></div>
           <label class="f">Alasan pemilihan (wajib bila bukan yang termurah)</label><textarea id="po-reason" placeholder="mis. stok tersedia, lead time lebih cepat"></textarea>
@@ -1278,7 +1287,7 @@ async function submitPR(){
   if(!purpose) return toast('Isi keperluan / alasan permintaan');
   if(!items.length) return toast('Isi minimal satu item dengan qty lebih dari 0');
   const now0=iso();
-  const d={id:uid(),no:nextNo('PR'),date:now0,firstDate:now0,requester,unitCode,dept,purpose,priority:$('#f-prio').value,needBy:$('#f-need').value,items,status:'PENDING_USER',history:[]};
+  const d={id:uid(),no:nextNo('PR',dept),date:now0,firstDate:now0,requester,unitCode,dept,purpose,priority:$('#f-prio').value,needBy:$('#f-need').value,items,status:'PENDING_USER',history:[]};
   hist(d,'Diajukan','Menunggu approval '+deptHeadLabel(dept));
   S.prs.unshift(d); closeModal(); save(); setTab('pr'); toast(d.no+' diajukan');
   notifyDeptHead(dept, `📝 PR baru ${d.no} dari ${requester} (${dept}) menunggu approval Anda.`);
@@ -1525,8 +1534,8 @@ function createPO(srcId){
   const fullCoverQuotes = s.quotes.filter(x=>coverCountQ(s,x)===srcOutstandingIdx(s).length);
   const lowest = fullCoverQuotes.length ? Math.min(...fullCoverQuotes.map(x=>qTotalOutstanding(s,x))) : null;
   const isFull = coverCountQ(s,q)===srcOutstandingIdx(s).length;
-  const creatorName=($('#po-creator')?.value||'').trim();
-  if(!creatorName) return toast('Pilih nama pembuat PO (Purchasing)');
+  const creatorName=(myProfile&&myProfile.name)||'';
+  if(!creatorName) return toast('Profil akun Purchasing tidak ditemukan, tidak bisa membuat PO');
   const reason=$('#po-reason').value.trim();
   if(isFull && lowest!==null && qTotalOutstanding(s,q)>lowest && !reason) return toast('Isi alasan pemilihan karena bukan quotation termurah');
   const narrative=($('#po-narrative')?.value||'').trim();
