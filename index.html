@@ -227,6 +227,7 @@ label.f{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;font-w
       <button class="tb-profile-btn" onclick="toggleTbMenu()"><div class="av" id="tbAv">?</div><b id="tbName"></b><span style="font-size:11px;color:var(--mut)">▾</span></button>
       <div class="tb-menu" id="tbMenu">
         <a id="tb-menu-sig" onclick="toggleTbMenu(false);manageSignatures()">🛡️ Tanda Tangan</a>
+        <a id="tb-menu-tg" onclick="toggleTbMenu(false);manageNotifyTelegram()">🔔 Notifikasi Telegram</a>
         <a id="tb-menu-pass" onclick="toggleTbMenu(false);changePassword()">🔑 Ganti Password</a>
         <a class="bad" id="tb-menu-logout" onclick="toggleTbMenu(false);doLogout()">⎋ Keluar</a>
       </div>
@@ -297,6 +298,68 @@ function deptFieldHtml(selectedDept){
 }
 function getDeptFieldValue(){ return myLockedDept() || ($('#f-dept')?.value||''); }
 function canDownloadHistoris(){ return can('purchasing') || can('planner') || can('dh_plantsm'); }
+
+/* ============ Notifikasi Telegram ============ */
+// Dikirim setiap kali ada PR/WR/PO dibuat atau diputuskan (approve/reject), ke pemegang peran
+// yang jadi giliran berikutnya. Gagal kirim (belum setup token/chat_id) tidak boleh mengganggu
+// alur utama aplikasi — selalu silent-fail.
+async function notifyTelegram(filter, text){
+  try{
+    let q = sb.from('profiles').select('telegram_chat_id').not('telegram_chat_id','is',null);
+    if(filter.role) q = q.eq('role', filter.role);
+    if(filter.dept) q = q.eq('dept', filter.dept);
+    const {data, error} = await q;
+    if(error || !data || !data.length) return;
+    await Promise.all(data.filter(r=>r.telegram_chat_id).map(r=>
+      sb.functions.invoke('tg-notify', {body:{chat_id:r.telegram_chat_id, text}}).catch(()=>{})
+    ));
+  }catch(e){ /* silent */ }
+}
+function notifyRole(roleKey, text){ notifyTelegram({role:roleKey}, text); }
+function notifyDeptHead(dept, text){ notifyTelegram({role:DEPT_ROLE[dept]}, text); }
+function notifyDeptUser(dept, text){ notifyTelegram({role:'user', dept}, text); notifyRole('planner', text); }
+const NOTIFY_TARGETS = [
+  {role:'dh_plantsm', label:'Head Plant-SM'}, {role:'dh_produksi', label:'Head Produksi'},
+  {role:'dh_hse', label:'Head HSE'}, {role:'dh_engineering', label:'Head Engineering'}, {role:'dh_hrga', label:'Head HRGA'},
+  {role:'mgmt1', label:'Project Manager'}, {role:'mgmt2', label:'Operational Director'},
+  {role:'validator', label:'Validator'}, {role:'finance', label:'Finance'}, {role:'warehouse', label:'Warehouse'},
+  {role:'purchasing', label:'Purchasing'}, {role:'planner', label:'Planner'},
+  {role:'user', dept:'PLANT', label:'User - Plant'}, {role:'user', dept:'SM', label:'User - SM'},
+  {role:'user', dept:'PRODUKSI', label:'User - Produksi'}, {role:'user', dept:'HSE', label:'User - HSE'},
+  {role:'user', dept:'ENGINEERING', label:'User - Engineering'}, {role:'user', dept:'HRGA', label:'User - HRGA'}
+];
+async function manageNotifyTelegram(){
+  current=null;
+  let rows=[];
+  try{
+    const {data,error} = await sb.from('profiles').select('id,role,dept,name,telegram_chat_id');
+    if(error) throw error;
+    rows = data||[];
+  }catch(e){ return toast('Gagal memuat data notifikasi: '+(e.message||e)); }
+  const findRow = (role,dept) => rows.find(r=>r.role===role && (dept===undefined || r.dept===dept));
+  showModal(`<h3>Notifikasi Telegram</h3><div class="hint">Setiap pemegang peran mendaftarkan Chat ID Telegram miliknya sendiri sekali. Aplikasi akan otomatis mengirim pesan ke Chat ID ini setiap kali ada PR/WR/PO baru atau keputusan approval yang jadi giliran peran tersebut. Cara dapat Chat ID: chat bot ini di Telegram, lalu kirim pesan apa saja — atau tanyakan ke admin.</div>
+  ${NOTIFY_TARGETS.map(tg=>{
+    const row = findRow(tg.role, tg.dept);
+    const chatId = row ? row.telegram_chat_id : null;
+    const mine = row ? (session && row.id===session.user.id) : false;
+    const rid = row ? row.id : '';
+    return `<div class="row" style="align-items:flex-start;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+      <div style="flex:1;min-width:150px"><b>${esc(tg.label)}</b>${row&&row.name?`<br><span class="hint">${esc(row.name)}</span>`:''}</div>
+      <div style="flex:1;min-width:170px">${mine?`<input id="tg-${rid}" value="${esc(chatId||'')}" placeholder="Chat ID Telegram"><button class="btn sm" style="margin-top:6px" onclick="saveTelegramChatId('${rid}')">Simpan</button>`:(chatId?'<span class="badge b-ok">Sudah diisi</span>':'<span class="hint">Belum diisi</span>')}</div>
+      <div style="flex:1;min-width:170px">${!mine?'<span class="hint">Hanya akun peran ini yang bisa mengisi (login sebagai akun tersebut).</span>':''}</div>
+    </div>`;
+  }).join('')}
+  <div class="btns" style="margin-top:14px"><button class="btn" onclick="closeModal()">Tutup</button></div>`);
+}
+async function saveTelegramChatId(profileId){
+  const val = ($('#tg-'+profileId)?.value||'').trim();
+  try{
+    const {error} = await sb.from('profiles').update({telegram_chat_id: val||null}).eq('id', profileId);
+    if(error) throw error;
+  }catch(e){ return toast('Gagal menyimpan Chat ID: '+(e.message||e)); }
+  toast('Chat ID Telegram tersimpan'); manageNotifyTelegram();
+}
+
 const LOGIN_ACCOUNTS = [
   {role:'mgmt2',          label:'Operational Director',    username:'operationaldirector'},
   {role:'mgmt1',          label:'Project Manager',         username:'projectmanager'},
@@ -349,6 +412,32 @@ const dd = ts => ts ? new Date(ts).toLocaleDateString('id-ID',{dateStyle:'medium
 const dd2 = ts => { if(!ts) return '-'; const x=new Date(ts); return String(x.getDate()).padStart(2,'0')+'/'+String(x.getMonth()+1).padStart(2,'0')+'/'+String(x.getFullYear()).slice(2); };
 const daysUntil = ts => ts ? Math.ceil((new Date(ts).setHours(0,0,0,0)-new Date().setHours(0,0,0,0))/86400000) : null;
 const addDays = (ts,n) => { const x=new Date(ts); x.setDate(x.getDate()+(n||0)); return x.toISOString(); };
+// Leadtime proses (hari): dihitung dari pertama kali dokumen dibuat (d.firstDate), TIDAK reset
+// walau dokumen sempat ditolak lalu diajukan ulang/dibuat ulang. Bila status sudah final
+// (ada di terminalStatuses), dipotong sampai waktu history terakhir; selain itu dihitung s/d sekarang.
+function leadtimeDays(d, terminalStatuses){
+  const start = d && (d.firstDate || d.date);
+  if(!start) return null;
+  let end = iso();
+  if(terminalStatuses && terminalStatuses.includes(d.status) && d.history && d.history.length){
+    end = d.history[d.history.length-1].ts;
+  }
+  return Math.max(0, Math.round((new Date(end)-new Date(start))/86400000));
+}
+// Berapa hari dokumen sudah menunggu di status SAAT INI (sejak perubahan status terakhir) —
+// dipakai untuk badge "mengendap" di daftar dokumen & Dashboard, supaya approval yang lama
+// tidak ditindaklanjuti kelihatan menonjol.
+function pendingSinceDays(d){
+  if(!d || !d.history || !d.history.length) return 0;
+  const last = d.history[d.history.length-1].ts;
+  return Math.max(0, Math.floor((new Date()-new Date(last))/86400000));
+}
+function waitBadge(d){
+  const days = pendingSinceDays(d);
+  if(days<2) return '';
+  const cls = days>=5 ? 'b-bad' : 'b-warn';
+  return ` <span class="badge ${cls}" title="Sudah menunggu ${days} hari sejak status terakhir berubah">⏰ ${days} hari</span>`;
+}
 /* ============ Data tetap perusahaan (untuk PO PDF) ============ */
 const COMPANY_ADDRESS = 'PT Citra Shipyard 12N, Treasury Tower, Kawasan District 8 LOT 28, Jl. Tulodong Atas 2 No.28, RT.5/RW.3, Senayan, Kec. Kby. Baru, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta (12190)';
 const DISTRICT_WH = 'EPNS';
@@ -383,14 +472,14 @@ const DEFAULT_CATALOG = [
 function emptyState(){ return {catalog:DEFAULT_CATALOG, suppliers:[], seq:{PR:0,WR:0,SRC:0,PO:0}, prs:[], wrs:[], src:[], pos:[], signatures:{}}; }
 
 /* ---- mapping antara bentuk data di JS (camelCase) dan kolom Supabase (snake_case) ---- */
-const toPR = r => ({id:r.id, no:r.no, date:r.date, requester:r.requester, unitCode:r.unit_code, dept:r.dept, purpose:r.purpose, priority:r.priority, needBy:r.need_by||'', items:r.items||[], status:r.status, deptHeadName:r.dept_head_name, history:r.history||[]});
-const fromPR = d => ({id:d.id, no:d.no, date:d.date, requester:d.requester, unit_code:d.unitCode, dept:d.dept, purpose:d.purpose, priority:d.priority, need_by:d.needBy||null, items:d.items||[], status:d.status, dept_head_name:d.deptHeadName||null, history:d.history||[]});
-const toWR = r => ({id:r.id, no:r.no, date:r.date, requester:r.requester, unitCode:r.unit_code, dept:r.dept, purpose:r.purpose, needBy:r.need_by||'', items:r.items||[], status:r.status, deptHeadName:r.dept_head_name, history:r.history||[]});
-const fromWR = d => ({id:d.id, no:d.no, date:d.date, requester:d.requester, unit_code:d.unitCode, dept:d.dept, purpose:d.purpose, need_by:d.needBy||null, items:d.items||[], status:d.status, dept_head_name:d.deptHeadName||null, history:d.history||[]});
+const toPR = r => ({id:r.id, no:r.no, date:r.date, firstDate:r.first_date||r.date, requester:r.requester, unitCode:r.unit_code, dept:r.dept, purpose:r.purpose, priority:r.priority, needBy:r.need_by||'', items:r.items||[], status:r.status, deptHeadName:r.dept_head_name, history:r.history||[]});
+const fromPR = d => ({id:d.id, no:d.no, date:d.date, first_date:d.firstDate||d.date, requester:d.requester, unit_code:d.unitCode, dept:d.dept, purpose:d.purpose, priority:d.priority, need_by:d.needBy||null, items:d.items||[], status:d.status, dept_head_name:d.deptHeadName||null, history:d.history||[]});
+const toWR = r => ({id:r.id, no:r.no, date:r.date, firstDate:r.first_date||r.date, requester:r.requester, unitCode:r.unit_code, dept:r.dept, purpose:r.purpose, needBy:r.need_by||'', items:r.items||[], status:r.status, deptHeadName:r.dept_head_name, history:r.history||[]});
+const fromWR = d => ({id:d.id, no:d.no, date:d.date, first_date:d.firstDate||d.date, requester:d.requester, unit_code:d.unitCode, dept:d.dept, purpose:d.purpose, need_by:d.needBy||null, items:d.items||[], status:d.status, dept_head_name:d.deptHeadName||null, history:d.history||[]});
 const toSRC = r => ({id:r.id, no:r.no, srcType:r.src_type, srcId:r.src_id, refNo:r.ref_no, date:r.date, items:r.items||[], quotes:r.quotes||[], status:r.status, poId:r.po_id, chosen:r.chosen, poIds:r.po_ids||(r.po_id?[r.po_id]:[]), itemStatus:r.item_status||null, history:r.history||[]});
 const fromSRC = d => ({id:d.id, no:d.no, src_type:d.srcType, src_id:d.srcId, ref_no:d.refNo, date:d.date, items:d.items||[], quotes:d.quotes||[], status:d.status, po_id:d.poId||null, chosen:d.chosen||null, po_ids:d.poIds||[], item_status:d.itemStatus||null, history:d.history||[]});
-const toPO = r => ({id:r.id, no:r.no, date:r.date, srcId:r.src_id, supplier:r.supplier, supplierAddress:r.supplier_address, supplierFax:r.supplier_fax, supplierAttn:r.supplier_attn, quoteNo:r.quote_no, deptReq:r.dept_req, leadDays:r.lead_days, items:r.items||[], subtotal:r.subtotal, discount:r.discount, ppn:r.ppn, shipping:r.shipping, total:r.total, narrative:r.narrative, reason:r.reason, creatorName:r.creator_name, needsDirector:r.needs_director, status:r.status, quoteFileName:r.quote_file_name, quoteFileData:r.quote_file_data, payment:r.payment, receiving:r.receiving, history:r.history||[]});
-const fromPO = d => ({id:d.id, no:d.no, date:d.date, src_id:d.srcId||null, supplier:d.supplier, supplier_address:d.supplierAddress||null, supplier_fax:d.supplierFax||null, supplier_attn:d.supplierAttn||null, quote_no:d.quoteNo||null, dept_req:d.deptReq||null, lead_days:d.leadDays||null, items:d.items||[], subtotal:d.subtotal||0, discount:d.discount||0, ppn:d.ppn||0, shipping:d.shipping||0, total:d.total||0, narrative:d.narrative||null, reason:d.reason||null, creator_name:d.creatorName||null, needs_director:!!d.needsDirector, status:d.status, quote_file_name:d.quoteFileName||null, quote_file_data:d.quoteFileData||null, payment:d.payment||null, receiving:d.receiving||null, history:d.history||[]});
+const toPO = r => ({id:r.id, no:r.no, date:r.date, firstDate:r.first_date||r.date, srcId:r.src_id, supplier:r.supplier, supplierAddress:r.supplier_address, supplierFax:r.supplier_fax, supplierAttn:r.supplier_attn, quoteNo:r.quote_no, deptReq:r.dept_req, leadDays:r.lead_days, items:r.items||[], subtotal:r.subtotal, discount:r.discount, ppn:r.ppn, shipping:r.shipping, total:r.total, narrative:r.narrative, reason:r.reason, creatorName:r.creator_name, needsDirector:r.needs_director, status:r.status, quoteFileName:r.quote_file_name, quoteFileData:r.quote_file_data, payment:r.payment, receiving:r.receiving, history:r.history||[]});
+const fromPO = d => ({id:d.id, no:d.no, date:d.date, first_date:d.firstDate||d.date, src_id:d.srcId||null, supplier:d.supplier, supplier_address:d.supplierAddress||null, supplier_fax:d.supplierFax||null, supplier_attn:d.supplierAttn||null, quote_no:d.quoteNo||null, dept_req:d.deptReq||null, lead_days:d.leadDays||null, items:d.items||[], subtotal:d.subtotal||0, discount:d.discount||0, ppn:d.ppn||0, shipping:d.shipping||0, total:d.total||0, narrative:d.narrative||null, reason:d.reason||null, creator_name:d.creatorName||null, needs_director:!!d.needsDirector, status:d.status, quote_file_name:d.quoteFileName||null, quote_file_data:d.quoteFileData||null, payment:d.payment||null, receiving:d.receiving||null, history:d.history||[]});
 
 async function loadFromSupabase(){
   const [prsR,wrsR,srcR,posR,sigR,seqR,catR,supR] = await Promise.all([
@@ -600,6 +689,7 @@ function render(){
   if($('#tbName')) $('#tbName').textContent = rname;
   const isGuest = role==='guest';
   if($('#tb-menu-sig')) $('#tb-menu-sig').style.display = isGuest?'none':'';
+  if($('#tb-menu-tg')) $('#tb-menu-tg').style.display = isGuest?'none':'';
   if($('#tb-menu-pass')) $('#tb-menu-pass').style.display = isGuest?'none':'';
   if($('#tb-menu-logout')) $('#tb-menu-logout').textContent = isGuest?'⎋ Keluar dari Mode Lihat':'⎋ Keluar';
   const pendingCount = ['pr','wr','src','po'].reduce((s,t)=>s+countAct(t),0);
@@ -617,6 +707,8 @@ const statTile = (icon,fg,bg,title,chipLabel,chipClass,value,desc) => `
 function vDash(){
   const act = [];
   ['pr','wr','src','po'].forEach(t=>coll(t).forEach(d=>{ if(isActionable(t,d)) act.push([t,d]); }));
+  act.sort((a,b)=>pendingSinceDays(b[1])-pendingSinceDays(a[1]));
+  const staleCount = act.filter(([t,d])=>pendingSinceDays(d)>=2).length;
   const cnt = (t,f)=>coll(t).filter(f).length;
   const label = {pr:'PR',wr:'WR',src:'Quotation',po:'PO'};
   return `
@@ -631,8 +723,8 @@ function vDash(){
     ${statTile('⏰','var(--bad)','var(--badb)','Invoice Jatuh Tempo','H-2','b-bad',cnt('po',d=>poInvoiceDueSoon(d)),'Invoice termin yang perlu segera dibayar Finance')}
   </div>
   <div class="dash-bottom">
-  <div class="card act-card"><div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:2px"><div><h3 style="margin:0 0 2px;font-size:15px">Perlu tindakan Anda</h3><span class="hint">Tindaklanjuti dokumen yang membutuhkan perhatian segera.</span></div>${act.length?`<a class="hint" style="color:var(--pri);font-weight:700;cursor:pointer" onclick="setTab('pr')">Lihat Semua ›</a>`:''}</div>
-    ${act.length ? `<div class="tw" style="margin-top:12px"><table><thead><tr><th>Jenis</th><th>No</th><th>Item / Supplier</th><th>Info evaluasi</th><th>Status</th><th></th></tr></thead><tbody>${act.map(([t,d])=>{
+  <div class="card act-card"><div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:2px"><div><h3 style="margin:0 0 2px;font-size:15px">Perlu tindakan Anda</h3><span class="hint">Tindaklanjuti dokumen yang membutuhkan perhatian segera.${staleCount?` <b style="color:var(--bad)">${staleCount} item sudah ≥ 2 hari menunggu.</b>`:''}</span></div>${act.length?`<a class="hint" style="color:var(--pri);font-weight:700;cursor:pointer" onclick="setTab('pr')">Lihat Semua ›</a>`:''}</div>
+    ${act.length ? `<div class="tw" style="margin-top:12px"><table><thead><tr><th>Jenis</th><th>No</th><th>Item / Supplier</th><th>Info evaluasi</th><th>Status</th><th>Menunggu</th><th></th></tr></thead><tbody>${act.map(([t,d])=>{
       let info='-';
       if(t==='po'){
         const lowInfo = d.reason ? '<span class="badge b-warn" title="'+esc(d.reason)+'">Bukan termurah</span>' : '<span class="badge b-ok">Termurah</span>';
@@ -645,7 +737,7 @@ function vDash(){
       } else if(t==='src'){
         info = d.quotes.length ? `${d.quotes.length} quotation masuk` : '<span class="badge b-warn">Belum ada quotation</span>';
       }
-      return `<tr class="click" onclick="openDoc('${t}','${d.id}')"><td><span class="badge b-gray">${label[t]}</span></td><td><b>${esc(d.no)}</b></td><td>${t==='po'?esc(d.supplier):summary(d.items)}</td><td>${info}</td><td>${badge(ST[t],d.status)}</td><td class="r"><button class="btn sm pri">Buka</button></td></tr>`;
+      return `<tr class="click" onclick="openDoc('${t}','${d.id}')"><td><span class="badge b-gray">${label[t]}</span></td><td><b>${esc(d.no)}</b></td><td>${t==='po'?esc(d.supplier):summary(d.items)}</td><td>${info}</td><td>${badge(ST[t],d.status)}</td><td>${waitBadge(d)||'<span class="hint">Baru</span>'}</td><td class="r"><button class="btn sm pri">Buka</button></td></tr>`;
     }).join('')}</tbody></table></div>`
     : `<div class="empty-hero"><div class="ic-wrap"><div class="ic-circ">📋</div><div class="ic-badge">!</div></div><div><b>Tidak ada dokumen yang perlu ditindaklanjuti untuk saat ini.</b><span>Saat ada Purchase Request atau Warehouse Request baru, Anda akan melihatnya di sini.</span></div></div>`}
   </div>
@@ -739,7 +831,7 @@ function vList(t){
   const expBtns = (cfg.exp&&data.length) ? cfg.exp.map(([l,fn])=>`<button class="btn" onclick="${fn}">${l}</button>`).join('') : '';
   return `<div class="top"><h2>${cfg.title}</h2>${cfg.btn?`<button class="btn pri" onclick="${cfg.btn[1]}">${cfg.btn[0]}</button>`:''}${expBtns}<p>${cfg.sub}</p></div>
   <div class="card tw">${data.length?`<table><thead><tr>${cfg.head.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>
-    ${data.map(d=>{const c=cfg.row(d);return `<tr class="click" onclick="openDoc('${t}','${d.id}')">${c.map((x,i)=>`<td>${x}${i===0&&isActionable(t,d)?'<span class="act">Perlu tindakan</span>':''}</td>`).join('')}</tr>`;}).join('')}
+    ${data.map(d=>{const c=cfg.row(d);return `<tr class="click" onclick="openDoc('${t}','${d.id}')">${c.map((x,i)=>`<td>${x}${i===0&&isActionable(t,d)?'<span class="act">Perlu tindakan</span>'+waitBadge(d):''}</td>`).join('')}</tr>`;}).join('')}
   </tbody></table>`:`<div class="empty">Belum ada dokumen.</div>`}</div>`;
 }
 
@@ -884,6 +976,7 @@ function returnSrcItemsClarify(srcId){
   });
   hist(s,'Item dikembalikan Purchasing untuk klarifikasi spesifikasi',names.join(', ')+' — '+note);
   if(pr) hist(pr,'Item dikembalikan Purchasing untuk klarifikasi spesifikasi',names.join(', ')+' — '+note);
+  if(pr) notifyDeptUser(pr.dept, `⚠ Item pada PR ${pr.no} (${names.join(', ')}) dikembalikan Purchasing untuk klarifikasi: ${note}`);
   refresh(); toast((idxs.length>1?idxs.length+' item':'1 item')+' dikembalikan untuk klarifikasi');
 }
 function prFlaggedIdx(pr){ return pr.items.reduce((a,it,i)=>{ if(it&&it.needsClarify) a.push(i); return a; },[]); }
@@ -924,6 +1017,7 @@ async function submitResolveClarify(prId){
   hist(d,'Klarifikasi dilengkapi User/Planner',names.join(', '));
   if(s) hist(s,'Klarifikasi dilengkapi User/Planner',names.join(', '));
   closeModal(); save(); setTab('pr'); toast(d.no+' — klarifikasi item terkirim ke Purchasing');
+  notifyRole('purchasing', `✅ Klarifikasi item PR ${d.no} (${names.join(', ')}) sudah dilengkapi — siap dilanjutkan.`);
 }
 function openDataUrl(dataUrl){
   try{
@@ -1183,9 +1277,11 @@ async function submitPR(){
   if(!dept) return toast('Pilih departemen');
   if(!purpose) return toast('Isi keperluan / alasan permintaan');
   if(!items.length) return toast('Isi minimal satu item dengan qty lebih dari 0');
-  const d={id:uid(),no:nextNo('PR'),date:iso(),requester,unitCode,dept,purpose,priority:$('#f-prio').value,needBy:$('#f-need').value,items,status:'PENDING_USER',history:[]};
+  const now0=iso();
+  const d={id:uid(),no:nextNo('PR'),date:now0,firstDate:now0,requester,unitCode,dept,purpose,priority:$('#f-prio').value,needBy:$('#f-need').value,items,status:'PENDING_USER',history:[]};
   hist(d,'Diajukan','Menunggu approval '+deptHeadLabel(dept));
   S.prs.unshift(d); closeModal(); save(); setTab('pr'); toast(d.no+' diajukan');
+  notifyDeptHead(dept, `📝 PR baru ${d.no} dari ${requester} (${dept}) menunggu approval Anda.`);
 }
 
 /* ============ Form: WR ============ */
@@ -1225,9 +1321,11 @@ function submitWR(){
   if(!dept) return toast('Pilih departemen');
   if(!purpose) return toast('Isi keperluan / alasan permintaan');
   if(!items.length) return toast('Isi minimal satu item dengan qty lebih dari 0');
-  const d={id:uid(),no:nextNo('WR'),date:iso(),requester,unitCode,dept,purpose,needBy:$('#f-need').value,items,status:'PENDING_USER',history:[]};
+  const now0=iso();
+  const d={id:uid(),no:nextNo('WR'),date:now0,firstDate:now0,requester,unitCode,dept,purpose,needBy:$('#f-need').value,items,status:'PENDING_USER',history:[]};
   hist(d,'Diajukan','Menunggu approval '+deptHeadLabel(dept));
   S.wrs.unshift(d); closeModal(); save(); setTab('wr'); toast(d.no+' diajukan');
+  notifyDeptHead(dept, `🏬 WR baru ${d.no} dari ${requester} (${dept}) menunggu approval Anda.`);
 }
 
 /* ============ Revisi PR / WR yang ditolak ============ */
@@ -1259,6 +1357,7 @@ async function submitRevisePR(id){
   d.status='PENDING_USER';
   hist(d,'Diajukan ulang','Direvisi setelah ditolak, menunggu approval '+deptHeadLabel(dept));
   closeModal(); save(); setTab('pr'); toast(d.no+' diajukan ulang');
+  notifyDeptHead(dept, `📝 PR ${d.no} sudah direvisi dan diajukan ulang — menunggu approval Anda.`);
 }
 function reviseWR(id){
   const d=find('wr',id); current=null;
@@ -1287,6 +1386,7 @@ function submitReviseWR(id){
   d.requester=requester; d.unitCode=unitCode; d.dept=dept; d.purpose=purpose; d.needBy=$('#f-need').value; d.items=items; d.status='PENDING_USER'; d.date=iso();
   hist(d,'Diajukan ulang','Direvisi setelah ditolak, menunggu approval '+deptHeadLabel(dept));
   closeModal(); save(); setTab('wr'); toast(d.no+' diajukan ulang');
+  notifyDeptHead(dept, `🏬 WR ${d.no} sudah direvisi dan diajukan ulang — menunggu approval Anda.`);
 }
 
 /* ============ Approval PR / WR ============ */
@@ -1300,13 +1400,13 @@ function decide(act){
     const headName = actorName();
     d.deptHeadName = headName;
     if(act==='approve'){
-      if(t==='wr'){ d.status='WH_PROCESS'; hist(d,'Disetujui '+headLabel,note,headName); }
-      else { d.status='PENDING_PM'; hist(d,'Disetujui '+headLabel,note,headName); }
+      if(t==='wr'){ d.status='WH_PROCESS'; hist(d,'Disetujui '+headLabel,note,headName); notifyRole('warehouse', `🏬 WR ${d.no} disetujui ${headLabel} — menunggu issue Warehouse.`); }
+      else { d.status='PENDING_PM'; hist(d,'Disetujui '+headLabel,note,headName); notifyRole('mgmt1', `📝 PR ${d.no} disetujui ${headLabel} — menunggu approval Project Manager.`); }
     }
-    else { d.status='REJECTED'; hist(d,'Ditolak '+headLabel,note,headName); }
+    else { d.status='REJECTED'; hist(d,'Ditolak '+headLabel,note,headName); notifyDeptUser(d.dept, `❌ ${t==='wr'?'WR':'PR'} ${d.no} ditolak ${headLabel}: ${note}`); }
   } else if(d.status==='PENDING_PM'){
-    if(act==='approve'){ d.status='SOURCING'; mkSrc('PR',d,d.items.map(i=>({name:i.name,spec:i.spec,qty:i.qty,uom:i.uom}))); hist(d,'Disetujui Project Manajer','Diteruskan ke Purchasing untuk quotation'); }
-    else { d.status='REJECTED'; hist(d,'Ditolak Project Manajer',note); }
+    if(act==='approve'){ d.status='SOURCING'; mkSrc('PR',d,d.items.map(i=>({name:i.name,spec:i.spec,qty:i.qty,uom:i.uom}))); hist(d,'Disetujui Project Manajer','Diteruskan ke Purchasing untuk quotation'); notifyRole('purchasing', `📝 PR ${d.no} disetujui Project Manager — siap dibuatkan quotation.`); }
+    else { d.status='REJECTED'; hist(d,'Ditolak Project Manajer',note); notifyDeptUser(d.dept, `❌ PR ${d.no} ditolak Project Manager: ${note}`); }
   }
   refresh(); toast('Tersimpan');
 }
@@ -1443,7 +1543,12 @@ function createPO(srcId){
   const deptReq = refDoc?refDoc.dept:'-';
   const purpose = refDoc?refDoc.purpose:'';
   const needsDirector = total>LIMIT;
-  const po={id:uid(),no:nextNo('PO'),srcId:s.id,supplier:q.supplier,supplierAddress:q.address||'',supplierFax:q.fax||'',supplierAttn:q.attn||'',quoteNo:q.quoteNo||'',quoteFileName:q.fileName||'',quoteFileData:q.fileData||'',deptReq,purpose,narrative,leadDays:q.leadDays,items,discount,ppnRate:ppnOn?ppnRate:0,ppn,shipping,subtotal,total,reason,creatorName,date:iso(),needsDirector,status:'PENDING_VALIDATOR',history:[]};
+  const now0=iso();
+  // Bila sourcing ini sudah pernah menghasilkan PO sebelumnya (mis. ditolak lalu dibuat ulang),
+  // leadtime PO baru melanjutkan dari PO pertama kali dibuat untuk sourcing ini — tidak reset.
+  const priorPos = S.pos.filter(p=>p.srcId===s.id);
+  const firstDate = priorPos.length ? priorPos.map(p=>p.firstDate||p.date).sort()[0] : now0;
+  const po={id:uid(),no:nextNo('PO'),srcId:s.id,supplier:q.supplier,supplierAddress:q.address||'',supplierFax:q.fax||'',supplierAttn:q.attn||'',quoteNo:q.quoteNo||'',quoteFileName:q.fileName||'',quoteFileData:q.fileData||'',deptReq,purpose,narrative,leadDays:q.leadDays,items,discount,ppnRate:ppnOn?ppnRate:0,ppn,shipping,subtotal,total,reason,creatorName,date:now0,firstDate,needsDirector,status:'PENDING_VALIDATOR',history:[]};
   hist(po,'PO dibuat',`Dibuat oleh ${creatorName} (Purchasing), diajukan ke ${ROLES.validator.name} (Validator)`);
   S.pos.unshift(po);
   targetIdx.forEach(i=>{ itemStatus[i]={poId:po.id}; });
@@ -1456,6 +1561,7 @@ function createPO(srcId){
   if(s.srcType==='PR'){ const pr=find('pr',s.srcId); if(pr){ pr.status='PO_PROCESS'; hist(pr,'PO dibuat',po.no+(stillOutstanding?' — sebagian item, sisanya masih outstanding':'')); } }
   else { const wr=find('wr',s.srcId); if(wr) hist(wr,'PO dibuat untuk item tidak ready',po.no); }
   save(); openDoc('po',po.id); render(); toast(po.no+' menunggu approval'+(stillOutstanding?' — item lain tetap outstanding':''));
+  notifyRole('validator', `🛒 PO baru ${po.no} (${rp(po.total)}) dibuat oleh ${creatorName} — menunggu validasi Anda.`);
 }
 function resetSrcAfterRejectPO(po,note,who){
   const s=S.src.find(x=>x.id===po.srcId);
@@ -1490,10 +1596,13 @@ function decidePO(act,note){
       if(!note) return toast('Catatan wajib diisi saat menolak');
       po.status='REJECTED'; hist(po,'Ditolak Validator',note);
       resetSrcAfterRejectPO(po,note,'Validator');
+      notifyRole('purchasing', `❌ PO ${po.no} ditolak Validator: ${note}`);
     } else if(po.needsDirector){
       po.status='PENDING_DIRECTOR'; hist(po,'Divalidasi Validator','Diteruskan langsung ke '+ROLES.mgmt2.name+' (Direktur Operation — nilai PO di atas '+rp(LIMIT)+')'+(note?' — '+note:''));
+      notifyRole('mgmt2', `🛒 PO ${po.no} (${rp(po.total)}) divalidasi Validator — menunggu approval Direktur Operation.`);
     } else {
       po.status='PENDING_MGMT'; hist(po,'Divalidasi Validator','Diteruskan ke '+ROLES.mgmt1.name+' (Project Manager)'+(note?' — '+note:''));
+      notifyRole('mgmt1', `🛒 PO ${po.no} (${rp(po.total)}) divalidasi Validator — menunggu approval Project Manager.`);
     }
   } else if(po.status==='PENDING_MGMT'){
     if(!can('mgmt1')) return toast('Hanya '+ROLES.mgmt1.name+' yang dapat memutuskan PO ini');
@@ -1501,10 +1610,13 @@ function decidePO(act,note){
       if(!note) return toast('Catatan wajib diisi saat menolak');
       po.status='REJECTED'; hist(po,'Ditolak Project Manajer',note);
       resetSrcAfterRejectPO(po,note,'Project Manajer');
+      notifyRole('purchasing', `❌ PO ${po.no} ditolak Project Manager: ${note}`);
     } else if(po.needsDirector){
       po.status='PENDING_DIRECTOR'; hist(po,'Disetujui Project Manajer','Diteruskan ke '+ROLES.mgmt2.name+' (nilai PO di atas '+rp(LIMIT)+')'+(note?' — '+note:''));
+      notifyRole('mgmt2', `🛒 PO ${po.no} (${rp(po.total)}) disetujui Project Manager — menunggu approval Direktur Operation.`);
     } else {
       po.status='PENDING_FINANCE'; hist(po,'Disetujui Project Manajer','Diteruskan ke Finance untuk proses pembayaran'+(note?' — '+note:''));
+      notifyRole('finance', `🛒 PO ${po.no} (${rp(po.total)}) disetujui Project Manager — menunggu proses pembayaran Finance.`);
     }
   } else if(po.status==='PENDING_DIRECTOR'){
     if(!can('mgmt2')) return toast('Hanya '+ROLES.mgmt2.name+' yang dapat memutuskan PO ini');
@@ -1512,8 +1624,10 @@ function decidePO(act,note){
       if(!note) return toast('Catatan wajib diisi saat menolak');
       po.status='REJECTED'; hist(po,'Ditolak Direktur Operation',note);
       resetSrcAfterRejectPO(po,note,'Direktur Operation');
+      notifyRole('purchasing', `❌ PO ${po.no} ditolak Direktur Operation: ${note}`);
     } else {
       po.status='PENDING_FINANCE'; hist(po,'Disetujui Direktur Operation','Diteruskan ke Finance untuk proses pembayaran'+(note?' — '+note:''));
+      notifyRole('finance', `🛒 PO ${po.no} (${rp(po.total)}) disetujui Direktur Operation — menunggu proses pembayaran Finance.`);
     }
   } else if(po.status==='PENDING_FINANCE'){
     if(!can('finance')) return toast('Hanya Tim Finance yang dapat memproses PO ini');
@@ -1521,6 +1635,7 @@ function decidePO(act,note){
       if(!note) return toast('Catatan wajib diisi saat menolak');
       po.status='REJECTED'; hist(po,'Ditolak Finance',note);
       resetSrcAfterRejectPO(po,note,'Finance');
+      notifyRole('purchasing', `❌ PO ${po.no} ditolak Finance: ${note}`);
     } else {
       const method=($('#pay-method')?.value)||'Transfer Bank'; const ref=($('#pay-ref')?.value||'').trim();
       const terminMatch = /Termin (\d+) Hari/.exec(method);
@@ -1534,6 +1649,7 @@ function decidePO(act,note){
           `${method}${ref?(' — Ref/No. Invoice: '+ref):''}${proof?' — bukti: '+proof.name:''}${termDays?' — Jatuh tempo '+dd(dueDate):''}`+(note?' — '+note:''));
         const s=S.src.find(x=>x.id===po.srcId);
         if(s){ if(s.srcType==='PR'){ const pr=find('pr',s.srcId); if(pr){ if(prReadyToClose(pr)){ pr.status='CLOSED'; hist(pr,'Semua item PR sudah di-PO & dibayar — PR ditutup',po.no); } else { hist(pr,'PO dibayar',po.no+' — masih ada item lain yang outstanding/menunggu PO'); } } } else { const wr=find('wr',s.srcId); if(wr) hist(wr,'PO terbit',po.no); } }
+        notifyRole('purchasing', `✅ PO ${po.no} sudah diproses pembayarannya oleh Finance — siap diterbitkan PDF ke supplier.`);
         refresh(); toast('Tersimpan');
       };
       if(file && typeof FileReader!=='undefined'){
@@ -1821,6 +1937,7 @@ function exportPRExcel(){
     'No PR': d.no, 'Tanggal': dd(d.date), 'Pemohon': d.requester||'-', 'Kode Unit': d.unitCode||'-', 'Departemen': d.dept||'-',
     'Prioritas': d.priority||'-', 'Dibutuhkan': d.needBy?dd(d.needBy):'-', 'Keperluan': d.purpose||'-',
     'Jumlah Item': d.items.length, 'Status': (PR_ST[d.status]||[d.status])[0], 'Head Departemen': d.deptHeadName||'-',
+    'Leadtime Proses (hari)': leadtimeDays(d,['CLOSED','REJECTED','CANCELLED']),
     'Disetujui/Ditolak Terakhir': lastHist(d,/Disetujui|Ditolak|Dibatalkan/)
   }));
   const detail = [];
@@ -1850,7 +1967,8 @@ function exportPOExcel(){
     const rc = d.receiving;
     return {
       'No PO': d.no, 'Tanggal': dd(d.date), 'Supplier': d.supplier||'-', 'Referensi': (S.src.find(s=>s.id===d.srcId)||{}).refNo || '-',
-      'Kode Unit': poUnitCode(d), 'Dept Req': d.deptReq||'-', 'Lead Time (hari)': d.leadDays||'-',
+      'Kode Unit': poUnitCode(d), 'Dept Req': d.deptReq||'-', 'Lead Time Supplier (hari)': d.leadDays||'-',
+      'Leadtime Proses (hari)': leadtimeDays(d,['RECEIVED','REJECTED','CANCELLED']),
       'Subtotal': d.subtotal||0, 'Diskon': d.discount||0, 'PPN': d.ppn||0, 'Ongkos Kirim': d.shipping||0, 'Total': d.total||0,
       'Status': (PO_ST[d.status]||[d.status])[0], 'Approver Saat Ini/Terakhir': (ROLES[poCurrentApproverKey(d)]||{}).name||'-',
       'Metode Pembayaran': d.payment?d.payment.method:'-', 'No Ref Pembayaran': d.payment?(d.payment.ref||'-'):'-', 'Tanggal Bayar': d.payment?dt(d.payment.date):'-',
@@ -1888,8 +2006,8 @@ function exportPRPdf(){
   const {jsPDF}=window.jspdf; const d=new jsPDF({unit:'mm',format:'a4',orientation:'landscape'});
   const startY = reportHeader(d,'Laporan Historis Purchase Request');
   d.autoTable({startY,
-    head:[['No PR','Tanggal','Pemohon','Kode Unit','Dept','Prioritas','Item','Status','Head Dept']],
-    body:prs.map(x=>[x.no,dd(x.date),x.requester||'-',x.unitCode||'-',x.dept||'-',x.priority||'-',summaryPlain(x.items),(PR_ST[x.status]||[x.status])[0],x.deptHeadName||'-']),
+    head:[['No PR','Tanggal','Pemohon','Kode Unit','Dept','Prioritas','Item','Status','Head Dept','Leadtime (hari)']],
+    body:prs.map(x=>[x.no,dd(x.date),x.requester||'-',x.unitCode||'-',x.dept||'-',x.priority||'-',summaryPlain(x.items),(PR_ST[x.status]||[x.status])[0],x.deptHeadName||'-',leadtimeDays(x,['CLOSED','REJECTED','CANCELLED'])]),
     styles:{fontSize:8,cellPadding:2},headStyles:{fillColor:[30,64,120]},
     columnStyles:{6:{cellWidth:60}}
   });
@@ -1906,8 +2024,8 @@ function exportPOPdf(){
   const startY = reportHeader(d,'Laporan Historis Purchase Order');
   const grandTotal = pos.reduce((s,x)=>s+(x.total||0),0);
   d.autoTable({startY,
-    head:[['No PO','Tanggal','Supplier','Kode Unit','Dept Req','Subtotal','Diskon','PPN','Ongkir','Total','Status','Pembayaran']],
-    body:pos.map(x=>[x.no,dd(x.date),x.supplier||'-',poUnitCode(x),x.deptReq||'-',fmt(x.subtotal,2),fmt(x.discount,2),fmt(x.ppn,2),fmt(x.shipping,2),fmt(x.total,2),(PO_ST[x.status]||[x.status])[0],x.payment?x.payment.method:'-']),
+    head:[['No PO','Tanggal','Supplier','Kode Unit','Dept Req','Subtotal','Diskon','PPN','Ongkir','Total','Status','Pembayaran','Leadtime (hari)']],
+    body:pos.map(x=>[x.no,dd(x.date),x.supplier||'-',poUnitCode(x),x.deptReq||'-',fmt(x.subtotal,2),fmt(x.discount,2),fmt(x.ppn,2),fmt(x.shipping,2),fmt(x.total,2),(PO_ST[x.status]||[x.status])[0],x.payment?x.payment.method:'-',leadtimeDays(x,['RECEIVED','REJECTED','CANCELLED'])]),
     styles:{fontSize:7.5,cellPadding:2},headStyles:{fillColor:[30,64,120]},
     columnStyles:{5:{halign:'right'},6:{halign:'right'},7:{halign:'right'},8:{halign:'right'},9:{halign:'right'}}
   });
