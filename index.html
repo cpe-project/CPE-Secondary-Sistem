@@ -228,6 +228,7 @@ label.f{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;font-w
       <div class="tb-menu" id="tbMenu">
         <a id="tb-menu-sig" onclick="toggleTbMenu(false);manageSignatures()">🛡️ Tanda Tangan</a>
         <a id="tb-menu-tg" onclick="toggleTbMenu(false);manageNotifyTelegram()">🔔 Notifikasi Telegram</a>
+        <a id="tb-menu-name" onclick="toggleTbMenu(false);editMyName()">✏️ Ganti Nama</a>
         <a id="tb-menu-pass" onclick="toggleTbMenu(false);changePassword()">🔑 Ganti Password</a>
         <a class="bad" id="tb-menu-logout" onclick="toggleTbMenu(false);doLogout()">⎋ Keluar</a>
       </div>
@@ -482,8 +483,14 @@ const fromSRC = d => ({id:d.id, no:d.no, src_type:d.srcType, src_id:d.srcId, ref
 const toPO = r => ({id:r.id, no:r.no, date:r.date, firstDate:r.first_date||r.date, srcId:r.src_id, supplier:r.supplier, supplierAddress:r.supplier_address, supplierFax:r.supplier_fax, supplierAttn:r.supplier_attn, quoteNo:r.quote_no, deptReq:r.dept_req, leadDays:r.lead_days, items:r.items||[], subtotal:r.subtotal, discount:r.discount, ppn:r.ppn, shipping:r.shipping, total:r.total, narrative:r.narrative, reason:r.reason, creatorName:r.creator_name, needsDirector:r.needs_director, status:r.status, quoteFileName:r.quote_file_name, quoteFileData:r.quote_file_data, payment:r.payment, receiving:r.receiving, history:r.history||[]});
 const fromPO = d => ({id:d.id, no:d.no, date:d.date, first_date:d.firstDate||d.date, src_id:d.srcId||null, supplier:d.supplier, supplier_address:d.supplierAddress||null, supplier_fax:d.supplierFax||null, supplier_attn:d.supplierAttn||null, quote_no:d.quoteNo||null, dept_req:d.deptReq||null, lead_days:d.leadDays||null, items:d.items||[], subtotal:d.subtotal||0, discount:d.discount||0, ppn:d.ppn||0, shipping:d.shipping||0, total:d.total||0, narrative:d.narrative||null, reason:d.reason||null, creator_name:d.creatorName||null, needs_director:!!d.needsDirector, status:d.status, quote_file_name:d.quoteFileName||null, quote_file_data:d.quoteFileData||null, payment:d.payment||null, receiving:d.receiving||null, history:d.history||[]});
 
+// Peran dengan tepat satu orang pemegang akun (bukan peran yang dipakai banyak akun sekaligus
+// seperti dh_* per departemen, 'user' per departemen, atau 'purchasing' yang kini 2 akun) —
+// untuk peran-peran ini, nama yang ditampilkan di seluruh aplikasi (ROLES[role].name) mengikuti
+// nama profil live di database, supaya tiap orang bisa perbaiki typo nama sendiri lewat
+// menu "Ganti Nama" dan langsung terlihat oleh semua orang begitu data di-refresh.
+const SINGLE_ACCOUNT_ROLES = ['validator','mgmt1','mgmt2','finance','warehouse','planner','admin'];
 async function loadFromSupabase(){
-  const [prsR,wrsR,srcR,posR,sigR,seqR,catR,supR] = await Promise.all([
+  const [prsR,wrsR,srcR,posR,sigR,seqR,catR,supR,profR] = await Promise.all([
     sb.from('prs').select('*').order('date',{ascending:false}),
     sb.from('wrs').select('*').order('date',{ascending:false}),
     sb.from('src').select('*').order('date',{ascending:false}),
@@ -491,7 +498,8 @@ async function loadFromSupabase(){
     sb.from('signatures').select('*'),
     sb.from('doc_seq').select('*'),
     sb.from('catalog').select('code,name,uom,stock,part_number,brand'),
-    sb.from('suppliers').select('name,address,fax,attn')
+    sb.from('suppliers').select('name,address,fax,attn'),
+    sb.from('profiles').select('role,name')
   ]);
   const S2 = emptyState();
   if(prsR.data) S2.prs = prsR.data.map(toPR);
@@ -502,6 +510,7 @@ async function loadFromSupabase(){
   if(seqR.data) seqR.data.forEach(r=>{ S2.seq[r.doc_type]=r.value; });
   if(catR.data && catR.data.length) S2.catalog = catR.data.map(r=>({code:r.code,name:r.name,uom:r.uom||'pcs',stock:Number(r.stock)||0,partNumber:r.part_number||'',brand:r.brand||''}));
   if(supR && supR.data) S2.suppliers = supR.data.map(r=>({name:r.name,address:r.address||'',fax:r.fax||'',attn:r.attn||''}));
+  if(profR && profR.data) profR.data.forEach(r=>{ if(SINGLE_ACCOUNT_ROLES.includes(r.role) && ROLES[r.role] && r.name) ROLES[r.role].name = r.name; });
   if(!S2.signatures.mgmt1) S2.signatures.mgmt1 = DEFAULT_SIGNATURES.mgmt1;
   if(!S2.signatures.mgmt2) S2.signatures.mgmt2 = DEFAULT_SIGNATURES.mgmt2;
   S = S2;
@@ -656,14 +665,14 @@ const SIGN_ROLES = ['validator','mgmt1','mgmt2'];
 function manageSignatures(){
   current=null;
   const rows = [
-    ...(PURCHASING_CREATORS.filter(nm=>can('purchasing') && myProfile && myProfile.name===nm).map(nm=>{
+    ...((can('purchasing') && myProfile && myProfile.name) ? [myProfile.name] : []).map(nm=>{
       const sig=S.signatures[nm];
       return `<div class="row" style="align-items:flex-start;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
         <div style="flex:1;min-width:150px"><b>Purchasing</b><br><span class="hint">${esc(nm)}</span></div>
         <div style="flex:1;min-width:150px">${sig?`<img src="${sig}" style="max-height:50px;max-width:160px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:2px">`:'<span class="hint">Belum ada tanda tangan</span>'}</div>
         <div style="flex:1;min-width:170px"><input type="file" accept="image/png,image/jpeg" onchange="uploadSignature('${esc(nm)}',this)">${sig?`<button class="btn sm bad" style="margin-top:6px" onclick="clearSignature('${esc(nm)}')">Hapus</button>`:''}</div>
       </div>`;
-    })),
+    }),
     ...SIGN_ROLES.filter(rk=>can(rk)).map(rk=>{
       const sig=S.signatures[rk];
       return `<div class="row" style="align-items:flex-start;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
@@ -700,6 +709,7 @@ function render(){
   const isGuest = role==='guest';
   if($('#tb-menu-sig')) $('#tb-menu-sig').style.display = isGuest?'none':'';
   if($('#tb-menu-tg')) $('#tb-menu-tg').style.display = isGuest?'none':'';
+  if($('#tb-menu-name')) $('#tb-menu-name').style.display = isGuest?'none':'';
   if($('#tb-menu-pass')) $('#tb-menu-pass').style.display = isGuest?'none':'';
   if($('#tb-menu-logout')) $('#tb-menu-logout').textContent = isGuest?'⎋ Keluar dari Mode Lihat':'⎋ Keluar';
   const pendingCount = ['pr','wr','src','po'].reduce((s,t)=>s+countAct(t),0);
@@ -2128,6 +2138,33 @@ async function changePassword(){
   if(np.length<6) return toast('Password minimal 6 karakter');
   const {error} = await sb.auth.updateUser({password:np});
   if(error) toast('Gagal ganti password: '+error.message); else toast('Password berhasil diganti');
+}
+async function editMyName(){
+  if(!session || !myProfile) return toast('Anda harus login untuk mengganti nama');
+  const oldName = myProfile.name || '';
+  const input = prompt('Nama (sesuai akun login Anda):', oldName);
+  if(input===null) return;
+  const newName = input.trim();
+  if(!newName) return toast('Nama tidak boleh kosong');
+  if(newName===oldName) return;
+  try{
+    const {error} = await sb.from('profiles').update({name:newName}).eq('id', session.user.id);
+    if(error) throw error;
+    // Purchasing: tanda tangan tersimpan dengan key = nama, jadi dipindahkan ke nama baru
+    // supaya tidak hilang hanya karena memperbaiki typo.
+    if(role==='purchasing' && S.signatures[oldName]){
+      const sigData = S.signatures[oldName];
+      S.signatures[newName] = sigData;
+      delete S.signatures[oldName];
+      await Promise.all([
+        sb.from('signatures').upsert({role:newName, data_url:sigData}),
+        sb.from('signatures').delete().eq('role', oldName)
+      ]);
+    }
+    myProfile.name = newName;
+    if(SINGLE_ACCOUNT_ROLES.includes(role) && ROLES[role]) ROLES[role].name = newName;
+  }catch(e){ return toast('Gagal mengganti nama: '+(e.message||e)); }
+  toast('Nama berhasil diganti'); render();
 }
 async function afterLogin(sess){
   session = sess;
