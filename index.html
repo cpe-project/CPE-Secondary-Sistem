@@ -229,6 +229,7 @@ label.f{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;font-w
         <a id="tb-menu-sig" onclick="toggleTbMenu(false);manageSignatures()">🛡️ Tanda Tangan</a>
         <a id="tb-menu-tg" onclick="toggleTbMenu(false);manageNotifyTelegram()">🔔 Notifikasi Telegram</a>
         <a id="tb-menu-name" onclick="toggleTbMenu(false);editMyName()">✏️ Ganti Nama</a>
+        <a id="tb-menu-tgadmin" onclick="toggleTbMenu(false);manageTelegramAdmin()">📡 Kelola Chat ID Telegram</a>
         <a id="tb-menu-pass" onclick="toggleTbMenu(false);changePassword()">🔑 Ganti Password</a>
         <a class="bad" id="tb-menu-logout" onclick="toggleTbMenu(false);doLogout()">⎋ Keluar</a>
       </div>
@@ -358,6 +359,51 @@ async function saveTelegramChatId(profileId){
     if(error) throw error;
   }catch(e){ return toast('Gagal menyimpan Chat ID: '+(e.message||e)); }
   toast('Chat ID Telegram tersimpan'); manageNotifyTelegram();
+}
+
+async function manageTelegramAdmin(){
+  current=null;
+  if(role!=='admin') return toast('Hanya admin yang bisa mengelola ini');
+  showModal(`<h3>Kelola Chat ID Telegram</h3><div class="hint">Memuat daftar kontak bot...</div>`);
+  let resp;
+  try{
+    const {data, error} = await sb.functions.invoke('tg-getupdates');
+    if(error) throw error;
+    resp = data;
+  }catch(e){
+    return showModal(`<h3>Kelola Chat ID Telegram</h3><div class="hint">Gagal memuat: ${esc(e.message||String(e))}</div><div class="btns" style="margin-top:14px"><button class="btn" onclick="closeModal()">Tutup</button></div>`);
+  }
+  if(resp && resp.error){
+    return showModal(`<h3>Kelola Chat ID Telegram</h3><div class="hint">${esc(resp.error)}${resp.detail?' — '+esc(JSON.stringify(resp.detail)):''}</div><div class="btns" style="margin-top:14px"><button class="btn" onclick="closeModal()">Tutup</button></div>`);
+  }
+  const chats = (resp && resp.chats) || [];
+  let profiles = [];
+  try{
+    const {data} = await sb.from('profiles').select('id,role,name,dept,telegram_chat_id').order('role');
+    profiles = data||[];
+  }catch(e){}
+  const profOpts = profiles.map(p=>`<option value="${p.id}">${esc(p.name||p.role)}${p.dept?' - '+esc(p.dept):''}${p.telegram_chat_id?' ✅ sudah ada':''}</option>`).join('');
+  const rows = chats.length ? chats.map(c=>`
+    <div class="row" style="align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
+      <div style="flex:1;min-width:160px"><b>${esc((c.first_name+' '+c.last_name).trim()||'(tanpa nama)')}</b>${c.username?` <span class="hint">@${esc(c.username)}</span>`:''}<br><span class="hint">Chat ID: ${esc(String(c.chat_id))}</span></div>
+      <div style="flex:1;min-width:140px"><span class="hint">"${esc((c.last_text||'').slice(0,40))}"</span></div>
+      <div style="flex:1;min-width:210px">
+        <select id="tgassign-${esc(String(c.chat_id))}"><option value="">-- pilih akun --</option>${profOpts}</select>
+        <button class="btn sm" style="margin-top:6px" onclick="assignTelegramChatId('${esc(String(c.chat_id))}')">Simpan</button>
+      </div>
+    </div>`).join('') : '<div class="hint" style="margin-top:10px">Belum ada yang chat ke bot. Minta tiap orang kirim pesan apa saja (mis. "hi") ke bot Telegram, lalu buka menu ini lagi.</div>';
+  showModal(`<h3>Kelola Chat ID Telegram</h3><div class="hint">Ditemukan ${chats.length} orang yang pernah chat ke bot. Pilih akun yang sesuai lalu klik Simpan untuk menautkan Chat ID-nya.</div>${rows}
+  <div class="btns" style="margin-top:14px"><button class="btn" onclick="manageTelegramAdmin()">Muat Ulang</button><button class="btn" onclick="closeModal()">Tutup</button></div>`);
+}
+async function assignTelegramChatId(chatId){
+  const sel = document.getElementById('tgassign-'+chatId);
+  const pid = sel && sel.value;
+  if(!pid) return toast('Pilih akun dulu');
+  try{
+    const {error} = await sb.from('profiles').update({telegram_chat_id:String(chatId)}).eq('id',pid);
+    if(error) throw error;
+  }catch(e){ return toast('Gagal menyimpan: '+(e.message||e)); }
+  toast('Chat ID tersimpan'); manageTelegramAdmin();
 }
 
 const LOGIN_ACCOUNTS = [
@@ -670,7 +716,13 @@ function manageSignatures(){
       return `<div class="row" style="align-items:flex-start;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
         <div style="flex:1;min-width:150px"><b>Purchasing</b><br><span class="hint">${esc(nm)}</span></div>
         <div style="flex:1;min-width:150px">${sig?`<img src="${sig}" style="max-height:50px;max-width:160px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:2px">`:'<span class="hint">Belum ada tanda tangan</span>'}</div>
-        <div style="flex:1;min-width:170px"><input type="file" accept="image/png,image/jpeg" onchange="uploadSignature('${esc(nm)}',this)">${sig?`<button class="btn sm bad" style="margin-top:6px" onclick="clearSignature('${esc(nm)}')">Hapus</button>`:''}</div>
+        <div style="flex:1;min-width:190px">
+          <input type="file" accept="image/png,image/jpeg" onchange="uploadSignature('${esc(nm)}',this)">
+          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn sm" onclick="drawSignature('${esc(nm)}')">✏️ Gambar</button>
+            ${sig?`<button class="btn sm bad" onclick="clearSignature('${esc(nm)}')">Hapus</button>`:''}
+          </div>
+        </div>
       </div>`;
     }),
     ...SIGN_ROLES.filter(rk=>can(rk)).map(rk=>{
@@ -678,11 +730,17 @@ function manageSignatures(){
       return `<div class="row" style="align-items:flex-start;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
         <div style="flex:1;min-width:150px"><b>${esc(ROLES[rk].label)}</b><br><span class="hint">${esc(ROLES[rk].name)}</span></div>
         <div style="flex:1;min-width:150px">${sig?`<img src="${sig}" style="max-height:50px;max-width:160px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:2px">`:'<span class="hint">Belum ada tanda tangan</span>'}</div>
-        <div style="flex:1;min-width:170px"><input type="file" accept="image/png,image/jpeg" onchange="uploadSignature('${rk}',this)">${sig?`<button class="btn sm bad" style="margin-top:6px" onclick="clearSignature('${rk}')">Hapus</button>`:''}</div>
+        <div style="flex:1;min-width:190px">
+          <input type="file" accept="image/png,image/jpeg" onchange="uploadSignature('${rk}',this)">
+          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn sm" onclick="drawSignature('${rk}')">✏️ Gambar</button>
+            ${sig?`<button class="btn sm bad" onclick="clearSignature('${rk}')">Hapus</button>`:''}
+          </div>
+        </div>
       </div>`;
     })
   ];
-  showModal(`<h3>Tanda Tangan Digital</h3><div class="hint">Unggah gambar tanda tangan Anda sekali (PNG/JPG). Tanda tangan ini otomatis tertempel di PO PDF saat PO dibuat (Purchasing) atau disetujui (Manajemen) — tidak perlu diunggah ulang tiap PO.</div>
+  showModal(`<h3>Tanda Tangan Digital</h3><div class="hint">Unggah gambar tanda tangan (PNG/JPG) atau gambar langsung dengan mouse/jari. Tanda tangan ini otomatis tertempel di PO PDF saat PO dibuat (Purchasing) atau disetujui (Manajemen) — tidak perlu diunggah ulang tiap PO.</div>
   ${rows.length?rows.join(''):'<div class="hint" style="margin-top:10px">Akun ini tidak memiliki tanda tangan yang perlu diunggah.</div>'}
   <div class="btns" style="margin-top:14px"><button class="btn" onclick="closeModal()">Tutup</button></div>`);
 }
@@ -690,11 +748,80 @@ function uploadSignature(rk,input){
   const file=input.files&&input.files[0]; if(!file) return;
   if(typeof FileReader==='undefined') return toast('Upload tanda tangan tidak didukung di lingkungan ini');
   const reader=new FileReader();
-  reader.onload=()=>{ S.signatures[rk]=reader.result; save(); manageSignatures(); toast('Tanda tangan tersimpan'); };
+  reader.onload=()=>{
+    const img=new Image();
+    img.onload=()=>{
+      const maxW=500,maxH=200;
+      const scale=Math.min(1,maxW/img.width,maxH/img.height);
+      const w=Math.max(1,Math.round(img.width*scale)), h=Math.max(1,Math.round(img.height*scale));
+      const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+      const ctx=cv.getContext('2d');
+      ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h);
+      ctx.drawImage(img,0,0,w,h);
+      S.signatures[rk]=cv.toDataURL('image/jpeg',0.82);
+      save(); manageSignatures(); toast('Tanda tangan tersimpan');
+    };
+    img.onerror=()=>toast('Gagal memproses gambar tanda tangan');
+    img.src=reader.result;
+  };
   reader.onerror=()=>toast('Gagal membaca file tanda tangan');
   reader.readAsDataURL(file);
 }
 function clearSignature(rk){ delete S.signatures[rk]; save(); manageSignatures(); toast('Tanda tangan dihapus'); }
+
+let sigPadCtx=null, sigPadDrawing=false, sigPadHasInk=false;
+function drawSignature(rk){
+  current=null;
+  showModal(`<h3>Gambar Tanda Tangan</h3>
+    <div class="hint">Gambar tanda tangan memakai mouse atau jari di kotak di bawah ini, lalu klik Simpan.</div>
+    <div style="border:2px dashed var(--line);border-radius:10px;margin-top:10px;background:#fff;touch-action:none">
+      <canvas id="sigPad" width="600" height="220" style="width:100%;height:220px;display:block;cursor:crosshair"></canvas>
+    </div>
+    <div class="btns" style="margin-top:14px">
+      <button class="btn" onclick="clearSigPad()">Bersihkan</button>
+      <button class="btn" onclick="manageSignatures()">Batal</button>
+      <button class="btn primary" onclick="saveSigPad('${esc(rk)}')">Simpan</button>
+    </div>`);
+  setTimeout(initSigPad,0);
+}
+function initSigPad(){
+  const cv=document.getElementById('sigPad'); if(!cv) return;
+  const ctx=cv.getContext('2d');
+  ctx.lineWidth=2.5; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.strokeStyle='#111';
+  sigPadCtx=ctx; sigPadDrawing=false; sigPadHasInk=false;
+  let last=null;
+  function posFromEvent(e){
+    const rect=cv.getBoundingClientRect();
+    const scaleX=cv.width/rect.width, scaleY=cv.height/rect.height;
+    const t=(e.touches&&e.touches[0])||e;
+    return {x:(t.clientX-rect.left)*scaleX, y:(t.clientY-rect.top)*scaleY};
+  }
+  function start(e){ e.preventDefault(); sigPadDrawing=true; last=posFromEvent(e); }
+  function move(e){
+    if(!sigPadDrawing) return; e.preventDefault();
+    const p=posFromEvent(e);
+    ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke();
+    last=p; sigPadHasInk=true;
+  }
+  function end(){ sigPadDrawing=false; }
+  cv.addEventListener('mousedown',start);
+  cv.addEventListener('mousemove',move);
+  cv.addEventListener('mouseup',end);
+  cv.addEventListener('mouseleave',end);
+  cv.addEventListener('touchstart',start,{passive:false});
+  cv.addEventListener('touchmove',move,{passive:false});
+  cv.addEventListener('touchend',end);
+}
+function clearSigPad(){
+  const cv=document.getElementById('sigPad'); if(!cv||!sigPadCtx) return;
+  sigPadCtx.clearRect(0,0,cv.width,cv.height); sigPadHasInk=false;
+}
+function saveSigPad(rk){
+  const cv=document.getElementById('sigPad'); if(!cv) return;
+  if(!sigPadHasInk) return toast('Gambar tanda tangan terlebih dahulu');
+  S.signatures[rk]=cv.toDataURL('image/png');
+  save(); manageSignatures(); toast('Tanda tangan tersimpan');
+}
 
 function render(){
   if(!role) return;
@@ -710,6 +837,7 @@ function render(){
   if($('#tb-menu-sig')) $('#tb-menu-sig').style.display = isGuest?'none':'';
   if($('#tb-menu-tg')) $('#tb-menu-tg').style.display = isGuest?'none':'';
   if($('#tb-menu-name')) $('#tb-menu-name').style.display = isGuest?'none':'';
+  if($('#tb-menu-tgadmin')) $('#tb-menu-tgadmin').style.display = (isGuest||role!=='admin')?'none':'';
   if($('#tb-menu-pass')) $('#tb-menu-pass').style.display = isGuest?'none':'';
   if($('#tb-menu-logout')) $('#tb-menu-logout').textContent = isGuest?'⎋ Keluar dari Mode Lihat':'⎋ Keluar';
   const pendingCount = ['pr','wr','src','po'].reduce((s,t)=>s+countAct(t),0);
@@ -1054,11 +1182,35 @@ function openDataUrl(dataUrl){
   }catch(e){ toast('Gagal membuka dokumen'); }
 }
 const fileLink = (name,data) => data ? `<button type="button" class="btn sm" onclick="openDataUrl('${data}')">👁 ${esc(name&&name.length>16?name.slice(0,14)+'…':name||'Lihat')}</button>` : '<span class="hint">-</span>';
-function readFileAsDataUrl(file){
+function readFileAsDataUrl(file){ return fileToStoredDataUrl(file); }
+function fileToStoredDataUrl(file){
   return new Promise(res=>{
     if(!file || typeof FileReader==='undefined') return res(null);
+    if(!/^image\//i.test(file.type||'')){
+      const r=new FileReader();
+      r.onload=()=>res({name:file.name,data:r.result});
+      r.onerror=()=>res(null);
+      r.readAsDataURL(file);
+      return;
+    }
     const r=new FileReader();
-    r.onload=()=>res({name:file.name,data:r.result});
+    r.onload=()=>{
+      const img=new Image();
+      img.onload=()=>{
+        try{
+          const maxW=1000,maxH=1000;
+          const scale=Math.min(1,maxW/img.width,maxH/img.height);
+          const w=Math.max(1,Math.round(img.width*scale)), h=Math.max(1,Math.round(img.height*scale));
+          const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+          const ctx=cv.getContext('2d');
+          ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h);
+          ctx.drawImage(img,0,0,w,h);
+          res({name:file.name,data:cv.toDataURL('image/jpeg',0.8)});
+        }catch(e){ res({name:file.name,data:r.result}); }
+      };
+      img.onerror=()=>res({name:file.name,data:r.result});
+      img.src=r.result;
+    };
     r.onerror=()=>res(null);
     r.readAsDataURL(file);
   });
@@ -1512,12 +1664,7 @@ function submitQuote(srcId){
     openDoc('src',srcId); save(); render(); toast('Quotation tersimpan');
   };
   const fileInput=$('#q-file'); const file=fileInput&&fileInput.files&&fileInput.files[0];
-  if(file && typeof FileReader!=='undefined'){
-    const reader=new FileReader();
-    reader.onload=()=>finalizeQuote({name:file.name,data:reader.result});
-    reader.onerror=()=>{ toast('Gagal membaca dokumen, disimpan tanpa dokumen'); finalizeQuote(null); };
-    reader.readAsDataURL(file);
-  } else finalizeQuote(null);
+  fileToStoredDataUrl(file).then(finalizeQuote);
 }
 function delQuote(srcId,qid){ const s=find('src',srcId); s.quotes=s.quotes.filter(q=>q.id!==qid); refresh(); }
 
@@ -1672,12 +1819,7 @@ function decidePO(act,note){
         notifyRole('purchasing', `✅ PO ${po.no} sudah diproses pembayarannya oleh Finance — siap diterbitkan PDF ke supplier.`);
         refresh(); toast('Tersimpan');
       };
-      if(file && typeof FileReader!=='undefined'){
-        const reader=new FileReader();
-        reader.onload=()=>finalizePayment({name:file.name,data:reader.result});
-        reader.onerror=()=>{ toast('Gagal membaca file bukti pembayaran, disimpan tanpa bukti'); finalizePayment(null); };
-        reader.readAsDataURL(file);
-      } else finalizePayment(null);
+      fileToStoredDataUrl(file).then(finalizePayment);
       return;
     }
   }
@@ -1713,15 +1855,8 @@ async function receivePO(id){
   const sjInput=document.querySelector('#recv-sj');
   const photoFiles = (photoInput && photoInput.files) ? [...photoInput.files] : [];
   const sjFile = sjInput && sjInput.files && sjInput.files[0];
-  const readFile = file => new Promise(res=>{
-    if(!file || typeof FileReader==='undefined') return res(null);
-    const r=new FileReader();
-    r.onload=()=>res({name:file.name,data:r.result});
-    r.onerror=()=>res(null);
-    r.readAsDataURL(file);
-  });
-  const photos = (await Promise.all(photoFiles.map(readFile))).filter(Boolean);
-  const suratJalan = await readFile(sjFile);
+  const photos = (await Promise.all(photoFiles.map(fileToStoredDataUrl))).filter(Boolean);
+  const suratJalan = await fileToStoredDataUrl(sjFile);
   const receivedBy = actorName();
   po.receiving = {photos, suratJalan, note, receivedBy, glName, receivedAt: iso()};
   po.status='RECEIVED';
