@@ -1395,12 +1395,24 @@ function docModal(t,id){
     }
     if(d.payment && d.payment.termDays){
       const left = daysUntil(d.payment.dueDate);
+      const pdocs = d.payment.docs||{};
+      const docList = `<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:6px">`+
+        [['invoice','Invoice'],['faktur','Faktur Pajak'],['bukti','Bukti Pembayaran']].map(([k,l])=>`<div><div class="hint">${l}</div>${pdocs[k]?fileLink(pdocs[k].name,pdocs[k].data):'<span class="hint">belum diupload</span>'}</div>`).join('')+`</div>`;
       if(d.payment.paid){
-        h += `<div class="sec"><h4>Status Invoice Termin</h4><span class="badge b-ok">Lunas dibayar ${dd(d.payment.paidDate)}</span></div>`;
+        h += `<div class="sec"><h4>Status Invoice Termin</h4><span class="badge b-ok">Lunas dibayar ${dd(d.payment.paidDate)}</span>${docList}</div>`;
       } else {
         const overdue = left<0;
         h += `<div class="${overdue||left<=2?'warnbox':'sec'}" style="${overdue?'border-color:#e8a8a8;background:#fdeaea':''}"><b>Invoice Termin ${d.payment.termDays} Hari — Belum Dibayar</b><br>Jatuh tempo: <b>${dd(d.payment.dueDate)}</b> ${overdue?`<span class="badge b-bad">Lewat jatuh tempo ${Math.abs(left)} hari</span>`:left<=2?`<span class="badge b-bad">H-${left}</span>`:`<span class="badge b-warn">H-${left}</span>`}
-          ${can('finance')?`<div class="btns" style="margin-top:8px"><button class="btn ok" onclick="markPaid('${d.id}')">Tandai Sudah Dibayar (Lunas)</button></div>`:''}</div>`;
+          ${docList}
+          ${can('finance')?(left<=2?`<div style="margin-top:12px;padding-top:10px;border-top:1px dashed #d9b3b3">
+            <b>Upload Dokumen Pembayaran</b><div class="hint">Tersedia mulai H-2 jatuh tempo. File yang sudah diupload bisa diganti dengan upload ulang.</div>
+            <div class="fld"><label>Invoice</label><input type="file" id="pay-doc-invoice" accept="image/*,.pdf"></div>
+            <div class="fld"><label>Faktur Pajak</label><input type="file" id="pay-doc-faktur" accept="image/*,.pdf"></div>
+            <div class="fld"><label>Bukti Pembayaran</label><input type="file" id="pay-doc-bukti" accept="image/*,.pdf"></div>
+            <div class="btns" style="margin-top:8px"><button class="btn" onclick="saveInvoiceDocs('${d.id}')">Simpan Dokumen</button>
+            <button class="btn ok" onclick="markPaid('${d.id}')">Tandai Sudah Dibayar (Lunas)</button></div>
+            <div class="hint">Lunas hanya bisa ditandai setelah Bukti Pembayaran diupload.</div></div>`
+            :`<div class="hint" style="margin-top:8px">Tools upload Invoice, Faktur Pajak &amp; Bukti Pembayaran terbuka otomatis mulai H-2 (${dd(addDays(d.payment.dueDate,-2))}).</div>`):''}</div>`;
       }
     }
     if(d.status==='PENDING_VALIDATOR'){
@@ -1888,9 +1900,26 @@ function decidePO(act,note){
   refresh(); toast(act==='approve'?'Tersimpan':'PO ditolak');
 }
 function markSent(id){ const po=find('po',id); po.status='SENT'; hist(po,'Dikirim ke supplier',po.supplier); refresh(); toast('Status: terkirim ke supplier'); }
+async function saveInvoiceDocs(id){
+  if(!can('finance')) return toast('Hanya Tim Finance yang dapat mengupload dokumen pembayaran');
+  const po=find('po',id); if(!po || !po.payment || !po.payment.termDays || po.payment.paid) return;
+  const map=[['invoice','pay-doc-invoice','Invoice'],['faktur','pay-doc-faktur','Faktur Pajak'],['bukti','pay-doc-bukti','Bukti Pembayaran']];
+  po.payment.docs = po.payment.docs||{};
+  const added=[];
+  for(const [k,el,label] of map){
+    const f=document.getElementById(el); const file=f&&f.files&&f.files[0];
+    if(!file) continue;
+    const r=await fileToStoredDataUrl(file);
+    if(r){ po.payment.docs[k]={name:r.name,data:r.data,date:iso()}; added.push(label); }
+  }
+  if(!added.length) return toast('Pilih minimal satu file untuk diupload');
+  hist(po,'Dokumen pembayaran diupload Finance',added.join(', '));
+  refresh(); toast('Dokumen tersimpan: '+added.join(', '));
+}
 function markPaid(id){
   if(!can('finance')) return toast('Hanya Tim Finance yang dapat menandai pembayaran invoice ini');
   const po=find('po',id); if(!po || !po.payment || !po.payment.termDays) return;
+  if(!(po.payment.docs&&po.payment.docs.bukti)) return toast('Upload Bukti Pembayaran dulu (klik Simpan Dokumen), baru tandai lunas');
   if(!confirm(`Tandai invoice ${po.payment.ref||po.no} sebagai sudah dibayar lunas?`)) return;
   po.payment.paid=true; po.payment.paidDate=iso();
   hist(po,'Invoice termin dibayar lunas',`${po.payment.method}${po.payment.ref?' — Ref: '+po.payment.ref:''}`);
