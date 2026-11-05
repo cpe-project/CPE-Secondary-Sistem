@@ -277,6 +277,7 @@ const ROLES = {
   mgmt1:         {label:'Project Manager (PO ≤ Rp5 jt)',            name:'Parto Jaya H Silitonga', title:'Project Manager'},
   mgmt2:         {label:'Operational Director (PO > Rp5 jt)',       name:'Faisal H Simangunsong', title:'Operational Director'},
   finance:       {label:'Finance',                                  name:'Eka Putri Shinta'},
+  finance_batam: {label:'Finance Batam',                            name:'Finance Batam', title:'Finance Batam'},
   warehouse:     {label:'Warehouse',                                name:'Joko'},
   admin:         {label:'Inventory',                                name:'Admin'},
   guest:         {label:'Lihat Saja',                                name:'Tamu (Lihat Saja)'}
@@ -327,7 +328,7 @@ const NOTIFY_TARGETS = [
   {role:'dh_plantsm', label:'Head Plant-SM'}, {role:'dh_produksi', label:'Head Produksi'},
   {role:'dh_hse', label:'Head HSE'}, {role:'dh_engineering', label:'Head Engineering'}, {role:'dh_hrga', label:'Head HRGA'},
   {role:'mgmt1', label:'Project Manager'}, {role:'mgmt2', label:'Operational Director'},
-  {role:'validator', label:'Validator'}, {role:'finance', label:'Finance'}, {role:'warehouse', label:'Warehouse'},
+  {role:'validator', label:'Validator'}, {role:'finance_batam', label:'Finance Batam'}, {role:'finance', label:'Finance'}, {role:'warehouse', label:'Warehouse'},
   {role:'purchasing', label:'Purchasing'}, {role:'planner', label:'Planner'},
   {role:'user', dept:'PLANT', label:'User - Plant'}, {role:'user', dept:'SM', label:'User - SM'},
   {role:'user', dept:'PRODUKSI', label:'User - Produksi'}, {role:'user', dept:'HSE', label:'User - HSE'},
@@ -425,6 +426,7 @@ const LOGIN_ACCOUNTS = [
   {role:'user',           label:'User - HSE',               username:'user-hse'},
   {role:'user',           label:'User - Engineering',       username:'user-engineering'},
   {role:'user',           label:'User - HRGA',              username:'user-hrga'},
+  {role:'finance_batam',  label:'Finance Batam',            username:'finance-batam'},
   {role:'finance',        label:'Finance',                  username:'finance'},
   {role:'admin',          label:'Inventory',                username:'admin'}
 ];
@@ -432,7 +434,7 @@ const SUPPLIERS = ['PT Sumber Teknik Mandiri','CV Berkah Alat Berat','PT Duta Sp
 const PR_ST = {PENDING_USER:['Menunggu Approval Head Departemen','warn'],PENDING_PM:['Menunggu Project Manajer','info'],PENDING_DIRECTOR:['Menunggu Direktur Operation','info'],SOURCING:['Proses Quotation','info'],PO_PROCESS:['PO Diproses','info'],CLOSED:['PO Terbit','ok'],REJECTED:['Ditolak','bad'],CANCELLED:['Dibatalkan Purchasing','bad']};
 const WR_ST = {PENDING_USER:['Menunggu Approval Head Departemen','warn'],WH_PROCESS:['Proses Warehouse','info'],SOURCING:['Tidak Ready – Quotation','warn'],PARTIAL:['Issue Sebagian – Sisa Quotation','warn'],ISSUED:['Sudah Di-issue','ok'],REJECTED:['Ditolak','bad']};
 const SRC_ST = {OPEN:['Perlu Quotation / PO','warn'],PO_CREATED:['PO Sudah Dibuat','ok']};
-const PO_ST = {PENDING_VALIDATOR:['Menunggu Validator','warn'],PENDING_MGMT:['Menunggu Project Manajer','warn'],PENDING_DIRECTOR:['Menunggu Direktur Operation','warn'],PENDING_FINANCE:['Menunggu Finance','info'],APPROVED:['Dibayar – PDF Terbit','ok'],SENT:['Terkirim ke Supplier','ok'],RECEIVED:['Barang Diterima (Closed)','ok'],REJECTED:['Ditolak','bad'],CANCELLED:['Dibatalkan Purchasing','bad']};
+const PO_ST = {PENDING_VALIDATOR:['Menunggu Validator','warn'],PENDING_FIN_BATAM:['Menunggu Finance Batam','warn'],PENDING_MGMT:['Menunggu Project Manajer','warn'],PENDING_DIRECTOR:['Menunggu Direktur Operation','warn'],PENDING_FINANCE:['Menunggu Finance','info'],APPROVED:['Dibayar – PDF Terbit','ok'],SENT:['Terkirim ke Supplier','ok'],RECEIVED:['Barang Diterima (Closed)','ok'],REJECTED:['Ditolak','bad'],CANCELLED:['Dibatalkan Purchasing','bad']};
 const ST = {pr:PR_ST,wr:WR_ST,src:SRC_ST,po:PO_ST};
 
 /* ============ Helper ============ */
@@ -534,7 +536,7 @@ const fromPO = d => ({id:d.id, no:d.no, date:d.date, first_date:d.firstDate||d.d
 // untuk peran-peran ini, nama yang ditampilkan di seluruh aplikasi (ROLES[role].name) mengikuti
 // nama profil live di database, supaya tiap orang bisa perbaiki typo nama sendiri lewat
 // menu "Ganti Nama" dan langsung terlihat oleh semua orang begitu data di-refresh.
-const SINGLE_ACCOUNT_ROLES = ['validator','mgmt1','mgmt2','finance','warehouse','planner','admin'];
+const SINGLE_ACCOUNT_ROLES = ['validator','mgmt1','mgmt2','finance','finance_batam','warehouse','planner','admin'];
 async function loadFromSupabase(){
   const [prsR,wrsR,srcR,posR,sigR,seqR,catR,supR,profR] = await Promise.all([
     sb.from('prs').select('*').order('date',{ascending:false}),
@@ -640,6 +642,7 @@ function prReadyToClose(pr){
 }
 function poCurrentApproverKey(po){
   if(po.status==='PENDING_VALIDATOR') return 'validator';
+  if(po.status==='PENDING_FIN_BATAM') return 'finance_batam';
   if(po.status==='PENDING_MGMT') return 'mgmt1';
   if(po.status==='PENDING_DIRECTOR') return 'mgmt2';
   return po.needsDirector ? 'mgmt2' : 'mgmt1';
@@ -663,6 +666,7 @@ function isActionable(t,d){
   if(t==='po'){
     const dueFlag = can('finance') && poInvoiceDueSoon(d);
     if(d.status==='PENDING_VALIDATOR') return can('validator');
+    if(d.status==='PENDING_FIN_BATAM') return can('finance_batam');
     if(d.status==='PENDING_MGMT') return can('mgmt1');
     if(d.status==='PENDING_DIRECTOR') return can('mgmt2');
     if(d.status==='PENDING_FINANCE') return can('finance');
@@ -865,6 +869,7 @@ function vDash(){
     ${statTile('🏬','var(--ok)','var(--okb)','WR Aktif','Proses','b-ok',cnt('wr',d=>!['ISSUED','REJECTED'].includes(d.status)),'Warehouse Request berjalan')}
     ${statTile('💬','var(--purple)','var(--purpleb)','Quotation','Menunggu','b-warn',cnt('src',d=>d.status==='OPEN'),'Menunggu penawaran supplier')}
     ${statTile('✅','var(--info)','var(--infob)','PO → Validator','Menunggu','b-warn',cnt('po',d=>d.status==='PENDING_VALIDATOR'),'Menunggu validasi Edison')}
+    ${statTile('🏦','var(--pink)','var(--pinkb)','PO → Finance Batam','Menunggu','b-warn',cnt('po',d=>d.status==='PENDING_FIN_BATAM'),'Menunggu approval Finance Batam')}
     ${statTile('📝','var(--orange)','var(--orangeb)','PO → PM','Menunggu','b-warn',cnt('po',d=>d.status==='PENDING_MGMT'),'Menunggu Project Manager')}
     ${statTile('👤','var(--teal)','var(--tealb)','PO → Direktur','Menunggu','b-warn',cnt('po',d=>d.status==='PENDING_DIRECTOR'),'Menunggu Direktur Operation')}
     ${statTile('💰','var(--pink)','var(--pinkb)','PO → Finance','Menunggu','b-warn',cnt('po',d=>d.status==='PENDING_FINANCE'),'Menunggu persetujuan Finance')}
@@ -910,7 +915,8 @@ function vInfo(){
   const poTail = [
     {t:'Purchasing buat quotation'},
     {t:'Purchasing buat PO'},
-    {t:'Validator memvalidasi PO', s:`${esc(ROLES.validator.name)} mengecek PO sebelum lanjut ke manajemen.`},
+    {t:'Validator memvalidasi PO', s:`${esc(ROLES.validator.name)} mengecek PO sebelum lanjut ke Finance Batam.`},
+    {t:'Finance Batam approve PO', s:'Finance Batam mengecek dan menyetujui PO sebelum naik ke Project Manager / Direktur.'},
     {t:'Approval sesuai nilai PO', b:[
       {k:`PO &le; ${rp(LIMIT)}`, v:`Approve ${esc(ROLES.mgmt1.name)} (Project Manager)`},
       {k:`PO &gt; ${rp(LIMIT)}`, v:`Langsung approve ${esc(ROLES.mgmt2.name)} (Direktur Operation), tanpa Project Manager`}
@@ -954,7 +960,7 @@ function vInfo(){
     <ul class="rules">
       <li><b>Approval PR:</b> Head Departemen sesuai departemen pengaju (Plant, SM, Produksi, HSE, Engineering, HRGA — masing-masing punya akun login sendiri dan hanya bisa approve PR/WR dari departemennya) → ${esc(ROLES.mgmt1.name)} (Project Manager), baru diteruskan ke Purchasing.</li>
       <li><b>Approval WR:</b> cukup Head Departemen sesuai departemen, langsung diteruskan ke Warehouse.</li>
-      <li><b>Approval PO:</b> setelah PO dibuat Purchasing, ${esc(ROLES.validator.name)} (Validator) memvalidasi lebih dulu. Bila total &le; ${rp(LIMIT)} diteruskan ke ${esc(ROLES.mgmt1.name)} (Project Manager); bila total &gt; ${rp(LIMIT)} langsung ke ${esc(ROLES.mgmt2.name)} (Direktur Operation) tanpa Project Manager — baru lanjut Finance.</li>
+      <li><b>Approval PO:</b> setelah PO dibuat Purchasing, ${esc(ROLES.validator.name)} (Validator) memvalidasi lebih dulu, lalu Finance Batam menyetujui. Bila total &le; ${rp(LIMIT)} diteruskan ke ${esc(ROLES.mgmt1.name)} (Project Manager); bila total &gt; ${rp(LIMIT)} langsung ke ${esc(ROLES.mgmt2.name)} (Direktur Operation) tanpa Project Manager — baru lanjut Finance.</li>
       <li><b>Penerbitan PO:</b> PO baru bisa diterbitkan sebagai PDF ke supplier setelah pembayaran diproses oleh Finance.</li>
       <li><b>Pembuatan dokumen:</b> PR hanya bisa dibuat oleh User/Planner; WR hanya oleh Planner.</li>
       <li><b>Laporan historis:</b> download PR/PO tersedia untuk Purchasing, Planner, dan Dept. Head Plant-SM.</li>
@@ -1356,14 +1362,17 @@ function docModal(t,id){
       }
     }
     if(d.status==='PENDING_VALIDATOR'){
-      if(can('validator')) h += decisionBox('Validasi & teruskan ke '+(d.needsDirector?'Direktur Operation':'Project Manajer'),'Tolak (kembali ke Purchasing)');
+      if(can('validator')) h += decisionBox('Validasi & teruskan ke Finance Batam','Tolak (kembali ke Purchasing)');
       else h += `<div class="warnbox">Menunggu validasi ${esc(ROLES.validator.name)} (Validator).</div>`;
+    } else if(d.status==='PENDING_FIN_BATAM'){
+      if(can('finance_batam')) h += decisionBox('Setujui & teruskan ke '+(d.needsDirector?'Direktur Operation':'Project Manajer'),'Tolak (kembali ke Purchasing)');
+      else h += `<div class="warnbox">Sudah divalidasi Validator. Menunggu approval Finance Batam.</div>`;
     } else if(d.status==='PENDING_MGMT'){
       if(can('mgmt1')) h += decisionBox('Setujui & teruskan ke '+(d.needsDirector?'Direktur Operation':'Finance'),'Tolak (kembali ke Purchasing)');
       else h += `<div class="warnbox">Menunggu approval ${esc(ROLES.mgmt1.name)} (Project Manajer).</div>`;
     } else if(d.status==='PENDING_DIRECTOR'){
       if(can('mgmt2')) h += decisionBox('Setujui & teruskan ke Finance','Tolak (kembali ke Purchasing)');
-      else h += `<div class="warnbox">${d.needsDirector?'Sudah divalidasi Validator — langsung ke':'Sudah disetujui Project Manajer. Menunggu approval'} ${esc(ROLES.mgmt2.name)} (Direktur Operation) karena nilai PO di atas ${rp(LIMIT)}.</div>`;
+      else h += `<div class="warnbox">${d.needsDirector?'Sudah disetujui Finance Batam — langsung ke':'Sudah disetujui Project Manajer. Menunggu approval'} ${esc(ROLES.mgmt2.name)} (Direktur Operation) karena nilai PO di atas ${rp(LIMIT)}.</div>`;
     } else if(d.status==='PENDING_FINANCE'){
       if(can('finance')){
         h += `<div class="decide"><b>Proses pembayaran PO</b>
@@ -1374,7 +1383,7 @@ function docModal(t,id){
           <div class="btns"><button class="btn ok" onclick="decide('approve')" id="pay-submit-btn">Proses pembayaran & lanjut ke PO PDF</button><button class="btn bad" onclick="decide('reject')">Tolak (kembali ke Purchasing)</button></div></div>`;
       } else h += `<div class="warnbox">Sudah disetujui Manajemen. Menunggu Tim Finance memproses pembayaran sebelum PO PDF dapat diterbitkan & dibagikan ke supplier.</div>`;
     }
-    if(can('purchasing') && ['PENDING_VALIDATOR','PENDING_MGMT','PENDING_DIRECTOR'].includes(d.status)){
+    if(can('purchasing') && ['PENDING_VALIDATOR','PENDING_FIN_BATAM','PENDING_MGMT','PENDING_DIRECTOR'].includes(d.status)){
       h += `<div class="btns"><button class="btn bad" onclick="pdfPO('${d.id}',true)">Unduh PO PDF (Urgent – belum disetujui/dibayar)</button></div><div class="hint" style="margin-top:6px">Khusus kondisi mendesak. PDF akan ditandai "DRAFT – BELUM DISETUJUI/DIBAYAR" dan tercatat di riwayat PO.</div>`;
     }
     if(can('purchasing') && d.status==='PENDING_FINANCE'){
@@ -1764,12 +1773,23 @@ function decidePO(act,note){
       po.status='REJECTED'; hist(po,'Ditolak Validator',note);
       resetSrcAfterRejectPO(po,note,'Validator');
       notifyRole('purchasing', `❌ PO ${po.no} ditolak Validator: ${note}`);
-    } else if(po.needsDirector){
-      po.status='PENDING_DIRECTOR'; hist(po,'Divalidasi Validator','Diteruskan langsung ke '+ROLES.mgmt2.name+' (Direktur Operation — nilai PO di atas '+rp(LIMIT)+')'+(note?' — '+note:''));
-      notifyRole('mgmt2', `🛒 PO ${po.no} (${rp(po.total)}) divalidasi Validator — menunggu approval Direktur Operation.`);
     } else {
-      po.status='PENDING_MGMT'; hist(po,'Divalidasi Validator','Diteruskan ke '+ROLES.mgmt1.name+' (Project Manager)'+(note?' — '+note:''));
-      notifyRole('mgmt1', `🛒 PO ${po.no} (${rp(po.total)}) divalidasi Validator — menunggu approval Project Manager.`);
+      po.status='PENDING_FIN_BATAM'; hist(po,'Divalidasi Validator','Diteruskan ke Finance Batam'+(note?' — '+note:''));
+      notifyRole('finance_batam', `🛒 PO ${po.no} (${rp(po.total)}) divalidasi Validator — menunggu approval Finance Batam.`);
+    }
+  } else if(po.status==='PENDING_FIN_BATAM'){
+    if(!can('finance_batam')) return toast('Hanya Finance Batam yang dapat menyetujui PO ini');
+    if(act==='reject'){
+      if(!note) return toast('Catatan wajib diisi saat menolak');
+      po.status='REJECTED'; hist(po,'Ditolak Finance Batam',note);
+      resetSrcAfterRejectPO(po,note,'Finance Batam');
+      notifyRole('purchasing', `❌ PO ${po.no} ditolak Finance Batam: ${note}`);
+    } else if(po.needsDirector){
+      po.status='PENDING_DIRECTOR'; hist(po,'Disetujui Finance Batam','Diteruskan langsung ke '+ROLES.mgmt2.name+' (Direktur Operation — nilai PO di atas '+rp(LIMIT)+')'+(note?' — '+note:''));
+      notifyRole('mgmt2', `🛒 PO ${po.no} (${rp(po.total)}) disetujui Finance Batam — menunggu approval Direktur Operation.`);
+    } else {
+      po.status='PENDING_MGMT'; hist(po,'Disetujui Finance Batam','Diteruskan ke '+ROLES.mgmt1.name+' (Project Manager)'+(note?' — '+note:''));
+      notifyRole('mgmt1', `🛒 PO ${po.no} (${rp(po.total)}) disetujui Finance Batam — menunggu approval Project Manager.`);
     }
   } else if(po.status==='PENDING_MGMT'){
     if(!can('mgmt1')) return toast('Hanya '+ROLES.mgmt1.name+' yang dapat memutuskan PO ini');
@@ -1930,7 +1950,7 @@ function pdfPO(id,draft){
   }
   y = Math.max(totalsBottom,narrBottom)+12;
   if(y>230){ d.addPage(); y=30; }
-  const finalApproverKey = poCurrentApproverKey(po);
+  const finalApproverKey = po.needsDirector ? 'mgmt2' : 'mgmt1';
   const validatedDone = po.status!=='PENDING_VALIDATOR';
   const approvedDone = ['PENDING_FINANCE','APPROVED','SENT','RECEIVED'].includes(po.status);
   const creatorName = po.creatorName || ROLES.purchasing.name;
