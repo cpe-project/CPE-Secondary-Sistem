@@ -346,12 +346,54 @@ async function manageNotifyTelegram(){
   if(!row) return toast('Profil akun tidak ditemukan');
   const tg = NOTIFY_TARGETS.find(t=>t.role===row.role && (t.dept===undefined || t.dept===row.dept)) || {label: row.name||row.role};
   const chatId = row.telegram_chat_id;
-  showModal(`<h3>Notifikasi Telegram</h3><div class="hint">Daftarkan Chat ID Telegram Anda sekali. Aplikasi akan otomatis mengirim pesan ke Chat ID ini setiap kali ada PR/WR/PO baru atau keputusan approval yang jadi giliran peran Anda (${esc(tg.label)}). Cara dapat Chat ID: chat <b>@userinfobot</b> di Telegram, kirim pesan apa saja, lalu salin angka "Id" yang dibalasnya. Jangan lupa juga chat bot notifikasi kita (<b>@cpe_purchasing_bot</b>) minimal sekali, supaya Telegram mengizinkan bot mengirim pesan ke Anda.</div>
-  <div class="row" style="align-items:flex-start;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
-    <div style="flex:1;min-width:150px"><b>${esc(tg.label)}</b>${row.name?`<br><span class="hint">${esc(row.name)}</span>`:''}</div>
-    <div style="flex:1;min-width:170px"><input id="tg-${row.id}" value="${esc(chatId||'')}" placeholder="Chat ID Telegram"><button class="btn sm" style="margin-top:6px" onclick="saveTelegramChatId('${row.id}')">Simpan</button></div>
+  const code = 'CPE'+String(row.id).replace(/-/g,'').slice(0,8);
+  showModal(`<h3>Notifikasi Telegram</h3>
+  <div class="hint">Peran: <b>${esc(tg.label)}</b>${row.name?' — '+esc(row.name):''}. Status: ${chatId?'<b style="color:var(--ok)">✅ Sudah terhubung</b>':'<b style="color:var(--bad)">Belum terhubung</b>'}</div>
+  <div style="margin-top:12px"><b>Cara menghubungkan (30 detik):</b></div>
+  <ol style="margin:6px 0 0 18px;line-height:1.7">
+    <li>Klik tombol <b>"Buka Bot Telegram"</b> di bawah, lalu di Telegram tekan <b>START</b>.</li>
+    <li>Kembali ke sini, klik <b>"Saya Sudah Start - Hubungkan"</b>. Selesai.</li>
+  </ol>
+  <div class="btns" style="margin-top:12px">
+    <button class="btn pri" onclick="openTelegramBot('${code}')">1. Buka Bot Telegram</button>
+    <button class="btn ok" onclick="linkTelegramAuto('${row.id}','${code}')">2. Saya Sudah Start - Hubungkan</button>
   </div>
+  <div id="tg-status" class="hint" style="margin-top:8px"></div>
+  <details style="margin-top:14px"><summary class="hint" style="cursor:pointer">Cara manual (isi Chat ID sendiri)</summary>
+    <div class="row" style="align-items:flex-start;margin-top:8px">
+      <div style="flex:1;min-width:170px"><input id="tg-${row.id}" value="${esc(chatId||'')}" placeholder="Chat ID Telegram"><button class="btn sm" style="margin-top:6px" onclick="saveTelegramChatId('${row.id}')">Simpan</button></div>
+    </div>
+  </details>
   <div class="btns" style="margin-top:14px"><button class="btn" onclick="closeModal()">Tutup</button></div>`);
+}
+let tgBotUsername = '';
+async function openTelegramBot(code){
+  const st = $('#tg-status'); if(st) st.textContent = 'Menyiapkan link bot...';
+  try{
+    if(!tgBotUsername){
+      const {data,error} = await sb.functions.invoke('tg-getupdates');
+      if(error) throw error;
+      if(data && data.error) throw new Error(data.error);
+      tgBotUsername = (data && data.bot_username) || '';
+    }
+    if(!tgBotUsername) throw new Error('nama bot tidak ditemukan');
+    window.open('https://t.me/'+tgBotUsername+'?start='+code,'_blank');
+    if(st) st.textContent = 'Telegram dibuka. Tekan START di sana, lalu kembali dan klik tombol 2.';
+  }catch(e){ if(st) st.innerHTML = '<span style="color:var(--bad)">Gagal: '+esc(e.message||String(e))+'</span>'; }
+}
+async function linkTelegramAuto(profileId, code){
+  const st = $('#tg-status'); if(st) st.textContent = 'Mencari chat Anda di Telegram...';
+  try{
+    const {data,error} = await sb.functions.invoke('tg-getupdates');
+    if(error) throw error;
+    if(data && data.error) throw new Error(data.error);
+    const hit = ((data&&data.chats)||[]).find(c=>String(c.last_text||'').includes(code));
+    if(!hit){ if(st) st.innerHTML = '<span style="color:var(--bad)">Belum terdeteksi. Pastikan sudah menekan START di bot (lewat tombol 1), tunggu 5 detik, lalu klik tombol 2 lagi.</span>'; return; }
+    const {error:e2} = await sb.from('profiles').update({telegram_chat_id:String(hit.chat_id)}).eq('id',profileId);
+    if(e2) throw e2;
+    sb.functions.invoke('tg-notify',{body:{chat_id:String(hit.chat_id),text:'✅ CPE ONE terhubung. Notifikasi approval akan masuk ke chat ini.'}}).catch(()=>{});
+    toast('Telegram terhubung'); manageNotifyTelegram();
+  }catch(e){ if(st) st.innerHTML = '<span style="color:var(--bad)">Gagal: '+esc(e.message||String(e))+'</span>'; }
 }
 async function saveTelegramChatId(profileId){
   const val = ($('#tg-'+profileId)?.value||'').trim();
