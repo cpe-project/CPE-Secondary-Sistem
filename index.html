@@ -230,6 +230,7 @@ label.f{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;font-w
         <a id="tb-menu-tg" onclick="toggleTbMenu(false);manageNotifyTelegram()">🔔 Notifikasi Telegram</a>
         <a id="tb-menu-name" onclick="toggleTbMenu(false);editMyName()">✏️ Ganti Nama</a>
         <a id="tb-menu-tgadmin" onclick="toggleTbMenu(false);manageTelegramAdmin()">📡 Kelola Chat ID Telegram</a>
+        <a id="tb-menu-backup" onclick="toggleTbMenu(false);exportBackup()">💾 Ekspor Backup Data</a>
         <a id="tb-menu-pass" onclick="toggleTbMenu(false);changePassword()">🔑 Ganti Password</a>
         <a class="bad" id="tb-menu-logout" onclick="toggleTbMenu(false);doLogout()">⎋ Keluar</a>
       </div>
@@ -404,6 +405,32 @@ async function saveTelegramChatId(profileId){
   toast('Chat ID Telegram tersimpan'); manageNotifyTelegram();
 }
 
+// Ekspor seluruh data aplikasi (semua tabel) ke satu file JSON — hanya Admin.
+async function exportBackup(){
+  if(role!=='admin') return toast('Hanya Admin yang dapat mengekspor backup');
+  toast('Menyiapkan backup, mohon tunggu...');
+  const tables=['profiles','doc_seq','signatures','catalog','suppliers','prs','wrs','src','pos'];
+  const out={app:'CPE ONE',exported_at:new Date().toISOString(),tables:{}};
+  for(const t of tables){
+    let rows=[], from=0; const step=200;
+    while(true){
+      const {data,error}=await sb.from(t).select('*').range(from,from+step-1);
+      if(error) return toast('Gagal mengekspor tabel '+t+': '+error.message);
+      rows=rows.concat(data||[]);
+      if(!data || data.length<step) break;
+      from+=step;
+    }
+    out.tables[t]=rows;
+  }
+  const total=Object.values(out.tables).reduce((s,r)=>s+r.length,0);
+  const blob=new Blob([JSON.stringify(out)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='cpe-one-backup-'+new Date().toISOString().slice(0,10)+'.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),3000);
+  toast('Backup diunduh ('+total+' baris dari '+tables.length+' tabel)');
+}
 async function manageTelegramAdmin(){
   current=null;
   if(role!=='admin') return toast('Hanya admin yang bisa mengelola ini');
@@ -884,6 +911,7 @@ function render(){
   if($('#tb-menu-tg')) $('#tb-menu-tg').style.display = isGuest?'none':'';
   if($('#tb-menu-name')) $('#tb-menu-name').style.display = isGuest?'none':'';
   if($('#tb-menu-tgadmin')) $('#tb-menu-tgadmin').style.display = (isGuest||role!=='admin')?'none':'';
+  if($('#tb-menu-backup')) $('#tb-menu-backup').style.display = (isGuest||role!=='admin')?'none':'';
   if($('#tb-menu-pass')) $('#tb-menu-pass').style.display = isGuest?'none':'';
   if($('#tb-menu-logout')) $('#tb-menu-logout').textContent = isGuest?'⎋ Keluar dari Mode Lihat':'⎋ Keluar';
   const pendingCount = ['pr','wr','src','po'].reduce((s,t)=>s+countAct(t),0);
