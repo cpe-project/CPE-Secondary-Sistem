@@ -229,7 +229,7 @@ label.f{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px;font-w
         <a id="tb-menu-sig" onclick="toggleTbMenu(false);manageSignatures()">🛡️ Tanda Tangan</a>
         <a id="tb-menu-tg" onclick="toggleTbMenu(false);manageNotifyTelegram()">🔔 Notifikasi Telegram</a>
         <a id="tb-menu-name" onclick="toggleTbMenu(false);editMyName()">✏️ Ganti Nama</a>
-        <a id="tb-menu-tgadmin" onclick="toggleTbMenu(false);manageTelegramAdmin()">📡 Kelola Chat ID Telegram</a>
+        <a id="tb-menu-tgadmin" onclick="toggleTbMenu(false);manageTelegramAdmin()">📡 Kelola Telegram</a>
         <a id="tb-menu-backup" onclick="toggleTbMenu(false);exportBackup()">💾 Ekspor Backup Data</a>
         <a id="tb-menu-pass" onclick="toggleTbMenu(false);changePassword()">🔑 Ganti Password</a>
         <a class="bad" id="tb-menu-logout" onclick="toggleTbMenu(false);doLogout()">⎋ Keluar</a>
@@ -317,10 +317,13 @@ async function notifyTelegram(filter, text){
     if(filter.dept) q = q.eq('dept', filter.dept);
     const {data, error} = await q;
     if(error || !data || !data.length) return;
-    await Promise.all(data.filter(r=>r.telegram_chat_id).map(r=>
-      sb.functions.invoke('tg-notify', {body:{chat_id:r.telegram_chat_id, text}}).catch(()=>{})
-    ));
-  }catch(e){ /* silent */ }
+    await Promise.all(data.filter(r=>r.telegram_chat_id).map(async r=>{
+      try{
+        const {error:e2} = await sb.functions.invoke('tg-notify', {body:{chat_id:r.telegram_chat_id, text}});
+        if(e2) console.warn('Telegram notif gagal:', e2.message||e2);
+      }catch(e3){ console.warn('Telegram notif gagal:', e3); }
+    }));
+  }catch(e){ console.warn('notifyTelegram', e); }
 }
 function notifyRole(roleKey, text){ notifyTelegram({role:roleKey}, text); }
 function notifyDeptHead(dept, text){ notifyTelegram({role:DEPT_ROLE[dept]}, text); }
@@ -336,7 +339,6 @@ const NOTIFY_TARGETS = [
   {role:'user', dept:'ENGINEERING', label:'User - Engineering'}, {role:'user', dept:'HRGA', label:'User - HRGA'}
 ];
 async function manageNotifyTelegram(){
-  current=null;
   if(!session) return toast('Anda harus login untuk mengatur notifikasi');
   let row=null;
   try{
@@ -346,63 +348,59 @@ async function manageNotifyTelegram(){
   }catch(e){ return toast('Gagal memuat data notifikasi: '+(e.message||e)); }
   if(!row) return toast('Profil akun tidak ditemukan');
   const tg = NOTIFY_TARGETS.find(t=>t.role===row.role && (t.dept===undefined || t.dept===row.dept)) || {label: row.name||row.role};
-  const chatId = row.telegram_chat_id;
-  const code = 'CPE'+String(row.id).replace(/-/g,'').slice(0,8);
+  const linked = !!row.telegram_chat_id;
   showModal(`<h3>Notifikasi Telegram</h3>
-  <div class="hint">Peran: <b>${esc(tg.label)}</b>${row.name?' — '+esc(row.name):''}. Status: ${chatId?'<b style="color:var(--ok)">✅ Sudah terhubung</b>':'<b style="color:var(--bad)">Belum terhubung</b>'}</div>
-  <div style="margin-top:12px"><b>Cara menghubungkan (30 detik):</b></div>
-  <ol style="margin:6px 0 0 18px;line-height:1.7">
-    <li>Klik tombol <b>"Buka Bot Telegram"</b> di bawah, lalu di Telegram tekan <b>START</b>.</li>
-    <li>Kembali ke sini, klik <b>"Saya Sudah Start - Hubungkan"</b>. Selesai.</li>
-  </ol>
-  <div class="btns" style="margin-top:12px">
-    <button class="btn pri" onclick="openTelegramBot('${code}')">1. Buka Bot Telegram</button>
-    <button class="btn ok" onclick="linkTelegramAuto('${row.id}','${code}')">2. Saya Sudah Start - Hubungkan</button>
-  </div>
+  <div class="hint">Peran: <b>${esc(tg.label)}</b>${row.name?' — '+esc(row.name):''}</div>
+  <div style="margin:10px 0;font-size:15px">Status: ${linked?'<b style="color:var(--ok)">✅ Terhubung</b>':'<b style="color:var(--bad)">Belum terhubung</b>'}</div>
+  ${linked?`<div class="btns"><button class="btn pri" onclick="testTelegram()">Kirim pesan tes</button><button class="btn" onclick="unlinkTelegramSelf()">Putuskan</button></div>`
+  :`<ol style="margin:6px 0 0 18px;line-height:1.7"><li>Tekan <b>Hubungkan Telegram</b>.</li><li>Di Telegram, tekan <b>START</b>. Selesai — halaman ini akan berubah sendiri.</li></ol>
+  <div class="btns" style="margin-top:12px"><button class="btn pri" onclick="startTelegramLink()">Hubungkan Telegram</button><button class="btn" onclick="manageNotifyTelegram()">Cek status</button></div>`}
   <div id="tg-status" class="hint" style="margin-top:8px"></div>
-  <details style="margin-top:14px"><summary class="hint" style="cursor:pointer">Cara manual (isi Chat ID sendiri)</summary>
-    <div class="row" style="align-items:flex-start;margin-top:8px">
-      <div style="flex:1;min-width:170px"><input id="tg-${row.id}" value="${esc(chatId||'')}" placeholder="Chat ID Telegram"><button class="btn sm" style="margin-top:6px" onclick="saveTelegramChatId('${row.id}')">Simpan</button></div>
-    </div>
-  </details>
-  <div class="btns" style="margin-top:14px"><button class="btn" onclick="closeModal()">Tutup</button></div>`);
+  <div class="btns" style="margin-top:14px"><button class="btn" onclick="tgStopPoll();closeModal()">Tutup</button></div>`);
 }
-let tgBotUsername = '';
-async function openTelegramBot(code){
-  const st = $('#tg-status'); if(st) st.textContent = 'Menyiapkan link bot...';
-  try{
-    if(!tgBotUsername){
-      const {data,error} = await sb.functions.invoke('tg-getupdates');
-      if(error) throw error;
-      if(data && data.error) throw new Error(data.error);
-      tgBotUsername = (data && data.bot_username) || '';
-    }
-    if(!tgBotUsername) throw new Error('nama bot tidak ditemukan');
-    window.open('https://t.me/'+tgBotUsername+'?start='+code,'_blank');
-    if(st) st.textContent = 'Telegram dibuka. Tekan START di sana, lalu kembali dan klik tombol 2.';
-  }catch(e){ if(st) st.innerHTML = '<span style="color:var(--bad)">Gagal: '+esc(e.message||String(e))+'</span>'; }
+let tgPoll=null;
+function tgStopPoll(){ if(tgPoll){ clearInterval(tgPoll); tgPoll=null; } }
+async function tgInvoke(body){
+  const {data,error} = await sb.functions.invoke('tg-setup',{body});
+  if(error){
+    let msg = error.message||String(error);
+    try{ const j = await error.context.json(); if(j&&j.error) msg=j.error; }catch(_){}
+    throw new Error(msg);
+  }
+  if(data && data.error) throw new Error(data.error);
+  return data;
 }
-async function linkTelegramAuto(profileId, code){
-  const st = $('#tg-status'); if(st) st.textContent = 'Mencari chat Anda di Telegram...';
+async function startTelegramLink(){
+  const st = $('#tg-status'); const say=(h)=>{ if(st) st.innerHTML=h; };
+  say('Menyiapkan...');
+  tgStopPoll();
   try{
-    const {data,error} = await sb.functions.invoke('tg-getupdates');
+    const info = await tgInvoke({action:'info'});
+    if(!info.bot_username) throw new Error('Nama bot tidak ditemukan');
+    const arr = new Uint8Array(8); crypto.getRandomValues(arr);
+    const code = Array.from(arr).map(b=>'abcdefghjkmnpqrstuvwxyz23456789'[b%31]).join('');
+    await sb.from('telegram_link_codes').delete().eq('user_id',session.user.id);
+    const {error} = await sb.from('telegram_link_codes').insert({code, user_id:session.user.id});
     if(error) throw error;
-    if(data && data.error) throw new Error(data.error);
-    const hit = ((data&&data.chats)||[]).find(c=>String(c.last_text||'').includes(code));
-    if(!hit){ if(st) st.innerHTML = '<span style="color:var(--bad)">Belum terdeteksi. Pastikan sudah menekan START di bot (lewat tombol 1), tunggu 5 detik, lalu klik tombol 2 lagi.</span>'; return; }
-    const {error:e2} = await sb.from('profiles').update({telegram_chat_id:String(hit.chat_id)}).eq('id',profileId);
-    if(e2) throw e2;
-    sb.functions.invoke('tg-notify',{body:{chat_id:String(hit.chat_id),text:'✅ CPE ONE terhubung. Notifikasi approval akan masuk ke chat ini.'}}).catch(()=>{});
-    toast('Telegram terhubung'); manageNotifyTelegram();
-  }catch(e){ if(st) st.innerHTML = '<span style="color:var(--bad)">Gagal: '+esc(e.message||String(e))+'</span>'; }
+    window.open('https://t.me/'+info.bot_username+'?start='+code,'_blank');
+    say('Telegram dibuka. Tekan <b>START</b> di sana, lalu tunggu...');
+    let n=0;
+    tgPoll = setInterval(async()=>{
+      n++;
+      const {data} = await sb.from('profiles').select('telegram_chat_id').eq('id',session.user.id).maybeSingle();
+      if(data && data.telegram_chat_id){ tgStopPoll(); toast('Telegram terhubung ✅'); manageNotifyTelegram(); }
+      else if(n>=30){ tgStopPoll(); say('Belum terdeteksi. Pastikan sudah menekan START, lalu klik <b>Cek status</b>. Jika tetap gagal, minta Admin menekan "Aktifkan Bot" di Kelola Telegram.'); }
+    },3000);
+  }catch(e){ say('<span style="color:var(--bad)">Gagal: '+esc(e.message||String(e))+'</span>'); }
 }
-async function saveTelegramChatId(profileId){
-  const val = ($('#tg-'+profileId)?.value||'').trim();
-  try{
-    const {error} = await sb.from('profiles').update({telegram_chat_id: val||null}).eq('id', profileId);
-    if(error) throw error;
-  }catch(e){ return toast('Gagal menyimpan Chat ID: '+(e.message||e)); }
-  toast('Chat ID Telegram tersimpan'); manageNotifyTelegram();
+async function testTelegram(){
+  const st = $('#tg-status'); if(st) st.textContent='Mengirim...';
+  try{ await tgInvoke({action:'test'}); if(st) st.innerHTML='<span style="color:var(--ok)">Terkirim — cek Telegram Anda.</span>'; }
+  catch(e){ if(st) st.innerHTML='<span style="color:var(--bad)">Gagal: '+esc(e.message||String(e))+'</span>'; }
+}
+async function unlinkTelegramSelf(){
+  try{ await tgInvoke({action:'unlink_self'}); toast('Koneksi Telegram diputus'); manageNotifyTelegram(); }
+  catch(e){ toast('Gagal: '+(e.message||e)); }
 }
 
 // Ekspor seluruh data aplikasi (semua tabel) ke satu file JSON — hanya Admin.
@@ -434,46 +432,34 @@ async function exportBackup(){
 async function manageTelegramAdmin(){
   current=null;
   if(role!=='admin') return toast('Hanya admin yang bisa mengelola ini');
-  showModal(`<h3>Kelola Chat ID Telegram</h3><div class="hint">Memuat daftar kontak bot...</div>`);
-  let resp;
-  try{
-    const {data, error} = await sb.functions.invoke('tg-getupdates');
-    if(error) throw error;
-    resp = data;
-  }catch(e){
-    return showModal(`<h3>Kelola Chat ID Telegram</h3><div class="hint">Gagal memuat: ${esc(e.message||String(e))}</div><div class="btns" style="margin-top:14px"><button class="btn" onclick="closeModal()">Tutup</button></div>`);
+  showModal(`<h3>Kelola Telegram</h3><div class="hint">Memuat status...</div>`);
+  let s;
+  try{ s = await tgInvoke({action:'status'}); }
+  catch(e){
+    return showModal(`<h3>Kelola Telegram</h3><div class="hint" style="color:var(--bad)">Gagal memuat: ${esc(e.message||String(e))}</div><div class="hint" style="margin-top:6px">Pastikan Edge Function <b>tg-setup</b> sudah terpasang.</div><div class="btns" style="margin-top:14px"><button class="btn" onclick="closeModal()">Tutup</button></div>`);
   }
-  if(resp && resp.error){
-    return showModal(`<h3>Kelola Chat ID Telegram</h3><div class="hint">${esc(resp.error)}${resp.detail?' — '+esc(JSON.stringify(resp.detail)):''}</div><div class="btns" style="margin-top:14px"><button class="btn" onclick="closeModal()">Tutup</button></div>`);
-  }
-  const chats = (resp && resp.chats) || [];
-  let profiles = [];
-  try{
-    const {data} = await sb.from('profiles').select('id,role,name,dept,telegram_chat_id').order('role');
-    profiles = data||[];
-  }catch(e){}
-  const profOpts = profiles.map(p=>`<option value="${p.id}">${esc(p.name||p.role)}${p.dept?' - '+esc(p.dept):''}${p.telegram_chat_id?' ✅ sudah ada':''}</option>`).join('');
-  const rows = chats.length ? chats.map(c=>`
-    <div class="row" style="align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
-      <div style="flex:1;min-width:160px"><b>${esc((c.first_name+' '+c.last_name).trim()||'(tanpa nama)')}</b>${c.username?` <span class="hint">@${esc(c.username)}</span>`:''}<br><span class="hint">Chat ID: ${esc(String(c.chat_id))}</span></div>
-      <div style="flex:1;min-width:140px"><span class="hint">"${esc((c.last_text||'').slice(0,40))}"</span></div>
-      <div style="flex:1;min-width:210px">
-        <select id="tgassign-${esc(String(c.chat_id))}"><option value="">-- pilih akun --</option>${profOpts}</select>
-        <button class="btn sm" style="margin-top:6px" onclick="assignTelegramChatId('${esc(String(c.chat_id))}')">Simpan</button>
-      </div>
-    </div>`).join('') : '<div class="hint" style="margin-top:10px">Belum ada yang chat ke bot. Minta tiap orang kirim pesan apa saja (mis. "hi") ke bot Telegram, lalu buka menu ini lagi.</div>';
-  showModal(`<h3>Kelola Chat ID Telegram</h3><div class="hint">Ditemukan ${chats.length} orang yang pernah chat ke bot. Pilih akun yang sesuai lalu klik Simpan untuk menautkan Chat ID-nya.</div>${rows}
-  <div class="btns" style="margin-top:14px"><button class="btn" onclick="manageTelegramAdmin()">Muat Ulang</button><button class="btn" onclick="closeModal()">Tutup</button></div>`);
+  const wh = s.webhook||{};
+  const whOk = wh.url && wh.url.includes('/functions/v1/tg-webhook');
+  const tokenLine = s.tokenError ? `<span style="color:var(--bad)">❌ ${esc(s.tokenError)}. Isi secret <b>TELEGRAM_BOT_TOKEN</b> di Supabase → Edge Functions → Secrets.</span>`
+    : `<span style="color:var(--ok)">✅ Bot @${esc(s.bot_username)}</span>`;
+  const whLine = s.tokenError ? '' : (whOk ? `<br><span style="color:var(--ok)">✅ Penerima pesan aktif</span>${wh.last_error_message?` <span class="hint">(error terakhir: ${esc(wh.last_error_message)})</span>`:''}` : `<br><span style="color:var(--bad)">❌ Penerima pesan belum aktif — tekan tombol di bawah.</span>`);
+  const rows = (s.accounts||[]).map(a=>`<tr><td>${esc(a.name||a.role)}${a.dept?' <span class="hint">'+esc(a.dept)+'</span>':''}</td><td>${a.linked?'<span style="color:var(--ok)">✅ Terhubung</span>':'<span class="hint">Belum</span>'}</td><td>${a.linked?`<button class="btn sm" onclick="adminUnlinkTelegram('${a.id}')">Putuskan</button>`:''}</td></tr>`).join('');
+  showModal(`<h3>Kelola Telegram</h3>
+  <div style="line-height:1.7">${tokenLine}${whLine}</div>
+  <div class="btns" style="margin-top:10px"><button class="btn pri" onclick="adminSetupTelegram()">${whOk?'Perbaiki / Aktifkan Ulang Bot':'Aktifkan Bot'}</button><button class="btn" onclick="manageTelegramAdmin()">Muat Ulang</button></div>
+  <div id="tg-status" class="hint" style="margin-top:6px"></div>
+  <div style="margin-top:12px;max-height:300px;overflow:auto"><table><tr><th>Akun</th><th>Telegram</th><th></th></tr>${rows}</table></div>
+  <div class="hint" style="margin-top:8px">Tiap pengguna menghubungkan akunnya sendiri lewat menu <b>Notifikasi Telegram</b>.</div>
+  <div class="btns" style="margin-top:14px"><button class="btn" onclick="closeModal()">Tutup</button></div>`);
 }
-async function assignTelegramChatId(chatId){
-  const sel = document.getElementById('tgassign-'+chatId);
-  const pid = sel && sel.value;
-  if(!pid) return toast('Pilih akun dulu');
-  try{
-    const {error} = await sb.from('profiles').update({telegram_chat_id:String(chatId)}).eq('id',pid);
-    if(error) throw error;
-  }catch(e){ return toast('Gagal menyimpan: '+(e.message||e)); }
-  toast('Chat ID tersimpan'); manageTelegramAdmin();
+async function adminSetupTelegram(){
+  const st = $('#tg-status'); if(st) st.textContent='Mengaktifkan...';
+  try{ await tgInvoke({action:'setup'}); toast('Bot diaktifkan ✅'); manageTelegramAdmin(); }
+  catch(e){ if(st) st.innerHTML='<span style="color:var(--bad)">Gagal: '+esc(e.message||String(e))+'</span>'; }
+}
+async function adminUnlinkTelegram(id){
+  try{ await tgInvoke({action:'unlink',id}); toast('Diputus'); manageTelegramAdmin(); }
+  catch(e){ toast('Gagal: '+(e.message||e)); }
 }
 
 const LOGIN_ACCOUNTS = [
