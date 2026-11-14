@@ -2173,6 +2173,29 @@ function pdfPR(id){
   d.text('Pemohon,',30,y,{align:'center'}); d.text('Mengetahui ('+deptHeadLabel(pr.dept)+'),',165,y,{align:'center'});
   d.line(15,y+20,55,y+20); d.line(150,y+20,190,y+20);
   d.setFontSize(8); d.text('Nama & Tanggal',30,y+24,{align:'center'}); d.text('Nama & Tanggal',165,y+24,{align:'center'});
+  // Lampiran: gambar item pada halaman kedua (dst.)
+  const att = pr.items.map((it,i)=>({it,i})).filter(o=>o.it.imageData && /^data:image\//.test(o.it.imageData));
+  if(att.length){
+    d.addPage();
+    const header=()=>{ d.setFont('helvetica','bold'); d.setFontSize(13); d.setTextColor(0); d.text('LAMPIRAN — Gambar Item',14,18); d.setFont('helvetica','normal'); d.setFontSize(9); d.text(pr.no,196,18,{align:'right'}); d.setDrawColor(30,64,120); d.setLineWidth(0.5); d.line(14,21,196,21); };
+    header();
+    const cw=88, ch=100, gap=6; let col=0, y0=28;
+    att.forEach(({it,i})=>{
+      if(col===2){ col=0; y0+=ch+gap+8; }
+      if(y0+ch+8>285){ d.addPage(); header(); col=0; y0=28; }
+      const x=14+col*(cw+gap);
+      d.setFont('helvetica','bold'); d.setFontSize(9);
+      d.text(d.splitTextToSize((i+1)+'. '+it.name,cw)[0],x,y0);
+      d.setDrawColor(200); d.setLineWidth(0.2); d.rect(x,y0+2,cw,ch-4);
+      try{
+        const pr2=d.getImageProperties(it.imageData);
+        const s=Math.min((cw-4)/pr2.width,(ch-8)/pr2.height);
+        const w=pr2.width*s, h=pr2.height*s;
+        d.addImage(it.imageData,imgFormat(it.imageData),x+(cw-w)/2,y0+2+((ch-4)-h)/2,w,h);
+      }catch(e){ d.setFont('helvetica','italic'); d.setFontSize(8); d.text('(gambar tidak dapat ditampilkan)',x+4,y0+12); }
+      col++;
+    });
+  }
   d.save(pr.no.replace(/\//g,'-')+'.pdf');
 }
 
